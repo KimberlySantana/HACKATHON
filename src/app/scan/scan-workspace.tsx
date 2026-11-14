@@ -2,7 +2,10 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ChangeEvent, DragEvent } from "react";
+import Image from "next/image";
+import { useLanguage } from "@/components/i18n";
 import type { ReceiptReview, ReceiptScanResult } from "@/lib/receipt/extraction";
+import type { TranslationKey } from "@/lib/i18n/translations";
 import type { Receipt, ReceiptItem } from "@/types";
 
 type ReceiptRole = "itemized" | "payment";
@@ -16,12 +19,69 @@ type SelectedFiles = Record<ReceiptRole, SelectedFile | null>;
 
 const money = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" });
 
-const receiptSlots: Array<{ role: ReceiptRole; label: string; description: string }> = [
-  { role: "itemized", label: "Itemized Receipt", description: "Food, drinks, subtotal & tax" },
-  { role: "payment", label: "Payment/Tip Receipt", description: "Tip & final charged amount" },
-];
+type Translator = (key: TranslationKey, values?: Record<string, string | number>) => string;
+
+function localizeServerError(message: string, t: Translator) {
+  if (message.includes("not configured")) return t("error.notConfigured");
+  if (message.includes("Upload an itemized receipt")) return t("error.noUploads");
+  if (message.includes("must be a JPEG")) {
+    const label = message.split(" must be a JPEG")[0];
+    return t("error.invalidType", { label });
+  }
+  if (message.includes("must be between 1 byte")) {
+    const label = message.split(" must be between 1 byte")[0];
+    return t("error.invalidSize", { label });
+  }
+  if (message.includes("returned no receipt data")) return t("error.noReceiptData");
+  if (message.includes("returned an invalid receipt response")) return t("error.invalidReceiptResponse");
+  if (message.includes("Receipt recognition failed")) return t("error.tryAgain");
+  return message;
+}
+
+function localizeReviewNote(note: string, t: Translator) {
+  if (note.startsWith("These receipts may not belong")) return t("review.mismatch");
+  if (note.startsWith("I could not confidently confirm")) return t("review.mismatchUnknown");
+  if (note.startsWith("Merchant names differ")) return t("review.merchantMismatch");
+  if (note.startsWith("Dates differ")) return t("review.dateMismatch");
+  if (note.startsWith("Merchant name is missing")) return t("review.merchantMissing");
+  if (note.startsWith("Receipt date is missing")) return t("review.dateMissing");
+  if (note.startsWith("Date format could not")) return t("review.dateInvalid");
+  if (note.startsWith("No itemized receipt was detected")) return t("review.noItemized");
+  if (note.startsWith("Itemized subtotal is missing")) return t("review.itemMissing");
+  if (note.startsWith("Itemized tax is missing")) return t("review.taxMissing");
+  if (note.startsWith("The itemized receipt has lower-confidence")) return t("review.itemizedLowConfidence");
+  if (note.startsWith("No clearly itemized receipt")) return t("review.receiptMissing");
+  if (note.startsWith("The payment receipt has a blank tip")) return t("review.tipBlank");
+  if (note.startsWith("The payment receipt shows suggested")) return t("review.tipSuggested");
+  if (note.startsWith("The payment receipt tip line is unclear")) return t("review.tipUnclear");
+  if (note.startsWith("No confirmed actual tip")) return t("review.tipMissing");
+  if (note.startsWith("No actual tip amount")) return t("review.tipNotPresent");
+  if (note.startsWith("The two receipts show different tip")) return t("review.tipConflict");
+  if (note.startsWith("Final charged total is missing or unreadable on the payment")) return t("review.totalMissingPayment");
+  if (note.startsWith("Final charged total is missing")) return t("review.totalMissing");
+  if (note.startsWith("The charged total differs")) return t("review.totalDifference");
+
+  const totalConflictMatch = note.match(/^The payment receipt total \(([^)]+)\) conflicts with the itemized receipt total \(([^)]+)\)/);
+  if (totalConflictMatch) return t("review.totalConflict", { payment: totalConflictMatch[1], itemized: totalConflictMatch[2] });
+
+  const itemMatch = note.match(/^Item (\d+) name is missing/);
+  if (itemMatch) return t("review.itemNameMissing", { item: itemMatch[1] });
+  const quantityMatch = note.match(/^Quantity for item (\d+) is missing/);
+  if (quantityMatch) return t("review.itemQuantityMissing", { item: quantityMatch[1] });
+  const priceMatch = note.match(/^Unit price for item (\d+) is missing/);
+  if (priceMatch) return t("review.itemPriceMissing", { item: priceMatch[1] });
+  const totalMatch = note.match(/^Line total for item (\d+) is missing/);
+  if (totalMatch) return t("review.itemTotalMissing", { item: totalMatch[1] });
+  const mismatchMatch = note.match(/^Line total for item (\d+) does not match/);
+  if (mismatchMatch) return t("review.itemTotalMismatch", { item: mismatchMatch[1] });
+  const checkMatch = note.match(/^Item (\d+) should be checked/);
+  if (checkMatch) return t("review.itemCheck", { item: checkMatch[1] });
+
+  return t("review.receiptNote");
+}
 
 export default function ScanWorkspace() {
+  const { t } = useLanguage();
   const [selectedFiles, setSelectedFiles] = useState<SelectedFiles>({ itemized: null, payment: null });
   const [receipt, setReceipt] = useState<Receipt | null>(null);
   const [review, setReview] = useState<ReceiptReview | null>(null);
@@ -32,6 +92,11 @@ export default function ScanWorkspace() {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const scanRequestId = useRef(0);
+
+  const receiptSlots: Array<{ role: ReceiptRole; label: string; description: string }> = [
+    { role: "itemized", label: t("scan.itemizedReceipt"), description: t("scan.itemizedDescription") },
+    { role: "payment", label: t("scan.paymentReceipt"), description: t("scan.paymentDescription") },
+  ];
 
   useEffect(() => {
     return () => {
@@ -69,7 +134,7 @@ export default function ScanWorkspace() {
     setReview(null);
     setTipManuallyEdited(false);
     setError(null);
-    setNotice(`Analyzing ${uploads.length === 2 ? "both receipts" : "your receipt"} with OpenAI…`);
+    setNotice(t("scan.readingReceipts", { receipts: uploads.length === 2 ? t("scan.bothReceipts") : t("scan.yourReceipt") }));
 
     try {
       const formData = new FormData();
@@ -78,24 +143,24 @@ export default function ScanWorkspace() {
 
       const response = await fetch("/api/receipt/scan", { method: "POST", body: formData });
       const payload = (await response.json().catch(() => ({}))) as Partial<ReceiptScanResult> & { error?: string };
-      if (!response.ok) throw new Error(payload.error || "Receipt recognition failed.");
-      if (!payload.receipt || !payload.review) throw new Error("Receipt recognition returned incomplete data.");
+      if (!response.ok) throw new Error(localizeServerError(payload.error || t("error.recognitionFailed"), t));
+      if (!payload.receipt || !payload.review) throw new Error(t("error.incompleteResponse"));
       if (requestId !== scanRequestId.current) return;
 
       setReceipt(payload.receipt);
       setReview(payload.review);
       setNotice(payload.review.needsConfirmation
-        ? "Receipts recognized, but please confirm they belong to the same bill."
+        ? t("scan.noticeConfirm")
         : payload.review.needsReview
-          ? "Receipt details merged. Check the highlighted fields before splitting."
+          ? t("scan.noticeReview")
           : uploads.length === 2
-            ? "Both receipts merged. Check the details before sending them to your group."
-            : "Receipt recognized. Check the details before sending it to your group.");
+            ? t("scan.noticeBothMerged")
+            : t("scan.noticeOneRecognized"));
     } catch (scanError) {
       if (requestId !== scanRequestId.current) return;
       setReceipt(null);
       setReview(null);
-      setError(scanError instanceof Error ? scanError.message : "Receipt recognition failed. Please try again.");
+      setError(scanError instanceof Error ? scanError.message : t("error.tryAgain"));
       setNotice(null);
     } finally {
       if (requestId === scanRequestId.current) setIsScanning(false);
@@ -104,12 +169,12 @@ export default function ScanWorkspace() {
 
   function handleFile(role: ReceiptRole, file: File) {
     if (!file.type.startsWith("image/")) {
-      setError("Please choose an image of your receipt.");
+      setError(t("error.invalidImage"));
       return;
     }
 
     if (file.size > 10 * 1024 * 1024) {
-      setError("That image is larger than 10 MB. Try a smaller photo.");
+      setError(t("error.tooLargeImage"));
       return;
     }
 
@@ -156,14 +221,14 @@ export default function ScanWorkspace() {
 
     try {
       const response = await fetch("/api/receipt");
-      if (!response.ok) throw new Error("Could not load the demo receipt.");
+      if (!response.ok) throw new Error(t("error.demoLoad"));
       const sample = (await response.json()) as Receipt;
       setReceipt(sample);
       setReview(null);
       setTipManuallyEdited(false);
-      setNotice("Demo extraction loaded. Check the details before sending it to your group.");
+      setNotice(t("scan.noticeDemoLoaded"));
     } catch {
-      setError("The demo receipt could not be loaded. Please try again.");
+      setError(t("error.demoLoadTryAgain"));
     } finally {
       setIsLoading(false);
     }
@@ -188,7 +253,7 @@ export default function ScanWorkspace() {
   function addItem() {
     setReceipt((current) => {
       if (!current) return current;
-      const newItem: ReceiptItem = { id: `item-${Date.now()}`, name: "New item", quantity: 1, unitPrice: 0, total: 0, assignedMemberIds: [] };
+      const newItem: ReceiptItem = { id: `item-${Date.now()}`, name: t("scan.newItem"), quantity: 1, unitPrice: 0, total: 0, assignedMemberIds: [] };
       return { ...current, items: [...current.items, newItem] };
     });
   }
@@ -198,18 +263,19 @@ export default function ScanWorkspace() {
   }
 
   return (
-    <div className="mt-12 grid gap-6 lg:grid-cols-[0.9fr_1.1fr] lg:items-start">
+    <div className="relative mt-12 grid gap-6 lg:grid-cols-[0.9fr_1.1fr] lg:items-start">
       <div className="space-y-5">
-        <section className="rounded-[2rem] border border-[#ebe7de] bg-white p-5 shadow-[0_20px_60px_rgba(76,67,51,0.08)] sm:p-7">
+        <section className="scan-card rounded-[2rem] border border-[#ebe7de] bg-white p-5 shadow-[0_20px_60px_rgba(76,67,51,0.08)] sm:p-7">
           <div className="flex items-start justify-between gap-4">
             <div>
-              <p className="text-xs font-bold uppercase tracking-[0.15em] text-[#a19e93]">STEP 1</p>
-              <h2 className="mt-2 text-2xl font-extrabold tracking-tight">Add your receipts</h2>
+              <p className="text-[11px] font-extrabold uppercase tracking-[0.18em] text-[#a19e93]">{t("scan.step1")} <span className="ml-1 text-[#ed795d]">{t("scan.step1Accent")}</span></p>
+              <h2 className="mt-2 text-2xl font-extrabold tracking-[-0.04em] sm:text-[1.7rem]">{t("scan.addReceipts")}</h2>
+              <p className="mt-2 max-w-sm text-sm leading-6 text-[#929087]">{t("scan.addReceiptsDescription")}</p>
             </div>
-            <span className="grid h-11 w-11 shrink-0 place-items-center rounded-2xl bg-[#f7efe9] text-xl" aria-hidden="true">✦</span>
+            <Image src="/mascots/pip-receipt.png" alt="" width={132} height={121} className="h-14 w-14 shrink-0 object-contain drop-shadow-[0_8px_12px_rgba(111,77,65,0.12)]" aria-hidden="true" />
           </div>
 
-          <div className="mt-6 grid gap-3 sm:grid-cols-2">
+          <div className="mt-7 grid gap-4 sm:grid-cols-2">
             {receiptSlots.map((slot) => {
               const selectedFile = selectedFiles[slot.role];
               return (
@@ -220,107 +286,109 @@ export default function ScanWorkspace() {
                     onDragOver={(event) => event.preventDefault()}
                     onDragLeave={() => setIsDragging(null)}
                     onDrop={(event) => handleDrop(slot.role, event)}
-                    className={`flex min-h-48 cursor-pointer flex-col items-center justify-center rounded-3xl border-2 border-dashed px-4 text-center transition ${isDragging === slot.role ? "border-[#ed795d] bg-[#fff5f1]" : "border-[#dedbd1] bg-[#fbfaf7] hover:border-[#ed795d] hover:bg-[#fffaf7]"}`}
+                    className={`group relative flex min-h-52 cursor-pointer flex-col items-center justify-center overflow-hidden rounded-[1.65rem] border-2 border-dashed px-4 text-center transition duration-300 hover:-translate-y-0.5 hover:shadow-[0_14px_30px_rgba(76,67,51,0.08)] focus-within:ring-4 focus-within:ring-[#ed795d]/10 ${isDragging === slot.role ? "border-[#ed795d] bg-[#fff5f1] shadow-[0_14px_30px_rgba(237,121,93,0.12)]" : "border-[#dedbd1] bg-[#fbfaf7] hover:border-[#ed795d] hover:bg-[#fffaf7]"}`}
                   >
-                    {selectedFile ? <img src={selectedFile.previewUrl} alt={`${slot.label} preview`} className="h-16 w-16 rounded-2xl object-cover" /> : <span className="grid h-12 w-12 place-items-center rounded-2xl bg-white text-xl shadow-sm" aria-hidden="true">↑</span>}
-                    <span className="mt-3 text-sm font-extrabold">{slot.label}</span>
-                    <span className="mt-1 text-xs leading-5 text-[#929087]">{selectedFile ? `${(selectedFile.file.size / 1024 / 1024).toFixed(1)} MB · ${isScanning ? "analyzing…" : "ready"}` : slot.description}</span>
+                    <span className="pointer-events-none absolute -right-8 -top-8 h-24 w-24 rounded-full bg-[#f7d7c9]/40 transition duration-300 group-hover:scale-125" aria-hidden="true" />
+                    {selectedFile ? <img src={selectedFile.previewUrl} alt={`${slot.label} preview`} className="relative h-16 w-16 rounded-2xl object-cover shadow-[0_8px_18px_rgba(76,67,51,0.14)]" /> : <span className="relative grid h-14 w-14 place-items-center rounded-2xl bg-white text-xl text-[#ed795d] shadow-[0_8px_18px_rgba(76,67,51,0.08)] transition duration-300 group-hover:rotate-3 group-hover:scale-105" aria-hidden="true">↑</span>}
+                    <span className="relative mt-4 text-sm font-extrabold tracking-[-0.01em]">{slot.label}</span>
+                    <span className="relative mt-1 text-xs leading-5 text-[#929087]">{selectedFile ? `${(selectedFile.file.size / 1024 / 1024).toFixed(1)} MB · ${isScanning ? t("scan.analyzingReceipts") : t("scan.readyToReview")}` : slot.description}</span>
+                    {!selectedFile && <span className="relative mt-3 rounded-full bg-white px-3 py-1.5 text-[10px] font-extrabold uppercase tracking-[0.12em] text-[#a19e93] shadow-sm transition group-hover:text-[#ed795d]">{t("scan.chooseImage")}</span>}
                     <input id={`${slot.role}-receipt-upload`} type="file" accept="image/*" onChange={(event) => handleFileChange(slot.role, event)} className="sr-only" />
                   </label>
-                  {selectedFile && <button type="button" onClick={() => removeFile(slot.role)} className="mt-2 w-full text-xs font-bold text-[#99968d] hover:text-[#ed795d]">Remove {slot.label}</button>}
+                  {selectedFile && <button type="button" onClick={() => removeFile(slot.role)} className="mt-2 w-full rounded-xl py-1.5 text-xs font-bold text-[#99968d] transition hover:bg-[#fff5f1] hover:text-[#ed795d]">{t("scan.remove", { label: slot.label })}</button>}
                 </div>
               );
             })}
           </div>
 
-          <p className="mt-4 text-center text-xs leading-5 text-[#929087]">Upload one receipt or both. We use the itemized receipt for items and tax, and the payment receipt for actual tip and charged total.</p>
+          <p className="mt-4 text-center text-xs leading-5 text-[#929087]">{t("scan.uploadDescription")}</p>
 
           <div className="mt-6 flex items-center gap-3">
             <div className="h-px flex-1 bg-[#eeeae2]" />
-            <span className="text-xs font-bold uppercase tracking-[0.12em] text-[#b0ada4]">or</span>
+            <span className="text-xs font-bold uppercase tracking-[0.12em] text-[#b0ada4]">{t("scan.or")}</span>
             <div className="h-px flex-1 bg-[#eeeae2]" />
           </div>
 
-          <button type="button" onClick={loadSampleReceipt} disabled={isLoading || isScanning} className="mt-5 flex min-h-12 w-full items-center justify-center gap-2 rounded-2xl border border-[#e7e3da] px-4 text-sm font-extrabold transition hover:border-[#ed795d] hover:bg-[#fffaf7] disabled:cursor-wait disabled:opacity-60">
-            {isLoading ? "Loading demo receipt…" : isScanning ? "Analyzing receipts…" : "Try a sample receipt"}
+          <button type="button" onClick={loadSampleReceipt} disabled={isLoading || isScanning} className="mt-5 flex min-h-12 w-full items-center justify-center gap-2 rounded-2xl border border-[#e7e3da] bg-white px-4 text-sm font-extrabold transition duration-200 hover:-translate-y-0.5 hover:border-[#ed795d] hover:bg-[#fffaf7] hover:shadow-[0_10px_22px_rgba(76,67,51,0.07)] focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-[#ed795d] disabled:cursor-wait disabled:opacity-60">
+            {isLoading ? t("scan.loadingDemo") : isScanning ? t("scan.analyzingReceipts") : t("scan.trySample")}
             {!isLoading && !isScanning && <span aria-hidden="true">↗</span>}
           </button>
 
-          <p className="mt-4 text-center text-xs leading-5 text-[#a19e93]">Images are used for this scan and are not saved by this app.</p>
+          <p className="mt-4 text-center text-xs leading-5 text-[#a19e93]">{t("scan.imagesNotice")}</p>
         </section>
 
-        <div className="rounded-2xl border border-[#eadfcf] bg-[#fff8ea] px-5 py-4 text-sm leading-6 text-[#77684d]">
+        <div className="rounded-2xl border border-[#eadfcf] bg-[#fff8ea] px-5 py-4 text-sm leading-6 text-[#77684d] shadow-[0_8px_24px_rgba(129,104,59,0.06)]">
           <span className="mr-2" aria-hidden="true">✳</span>
-          <strong>Secure recognition:</strong> OpenAI receives the uploaded images through the server route. Your API key stays in <code className="rounded bg-white/70 px-1">.env.local</code> and is never sent to the browser.
+          <strong>{t("scan.secureRecognition")}</strong> {t("scan.secureRecognitionDetail")}
         </div>
       </div>
 
-      <section className="rounded-[2rem] border border-[#ebe7de] bg-white p-5 shadow-[0_20px_60px_rgba(76,67,51,0.08)] sm:p-7">
+      <section className="scan-card rounded-[2rem] border border-[#ebe7de] bg-white p-5 shadow-[0_20px_60px_rgba(76,67,51,0.08)] sm:p-7">
         <div className="flex items-start justify-between gap-4">
           <div>
-            <p className="text-xs font-bold uppercase tracking-[0.15em] text-[#a19e93]">STEP 2</p>
-            <h2 className="mt-2 text-2xl font-extrabold tracking-tight">Check the details</h2>
+            <p className="text-[11px] font-extrabold uppercase tracking-[0.18em] text-[#a19e93]">{t("scan.step2")} <span className="ml-1 text-[#ed795d]">{t("scan.step2Accent")}</span></p>
+            <h2 className="mt-2 text-2xl font-extrabold tracking-[-0.04em] sm:text-[1.7rem]">{t("scan.checkDetails")}</h2>
           </div>
-          {receipt && (review?.needsConfirmation ? <span className="rounded-full bg-[#fff0ed] px-3 py-1.5 text-xs font-bold text-[#b64e3a]">Confirm receipts</span> : review?.needsReview ? <span className="rounded-full bg-[#fff3d5] px-3 py-1.5 text-xs font-bold text-[#8a6d2f]">Needs review</span> : <span className="rounded-full bg-[#edf1e8] px-3 py-1.5 text-xs font-bold text-[#687957]">Ready to split ✓</span>)}
+          {receipt && (review?.needsConfirmation ? <span className="rounded-full bg-[#fff0ed] px-3 py-1.5 text-xs font-bold text-[#b64e3a]">{t("scan.confirmReceipts")}</span> : review?.needsReview ? <span className="rounded-full bg-[#fff3d5] px-3 py-1.5 text-xs font-bold text-[#8a6d2f]">{t("scan.needsReview")}</span> : <span className="inline-flex items-center gap-1.5 rounded-full bg-[#edf1e8] px-3 py-1.5 text-xs font-bold text-[#687957]"><Image src="/mascots/pip-receipt.png" alt="" width={40} height={37} className="h-5 w-5 object-contain" aria-hidden="true" />{t("scan.readyToSplit")}</span>)}
         </div>
 
-        {isScanning && <p role="status" className="mt-5 rounded-2xl bg-[#fff8ea] px-4 py-3 text-sm font-semibold leading-6 text-[#77684d]">OpenAI is reading {uploadCount === 2 ? "both receipts" : "your receipt"}. This can take a few seconds…</p>}
-        {notice && <p className="mt-5 rounded-2xl bg-[#f7f6f1] px-4 py-3 text-sm leading-6 text-[#77766d]">{notice}</p>}
-        {error && <p role="alert" className="mt-5 rounded-2xl bg-[#fff0ed] px-4 py-3 text-sm font-semibold leading-6 text-[#b64e3a]">{error}</p>}
-        {review?.needsConfirmation && <div className="mt-5 rounded-2xl border border-[#e6a095] bg-[#fff5f2] px-4 py-3 text-sm leading-6 text-[#8d4135]"><strong>Confirm these receipts belong to the same bill.</strong> {review.notes.filter((note) => /receipt|transaction|merchant|date|total/i.test(note)).join(" ")}</div>}
-        {review?.needsReview && <div className="mt-5 rounded-2xl border border-[#e6c66f] bg-[#fffaf0] px-4 py-3 text-sm leading-6 text-[#77684d]"><strong>Review highlighted fields.</strong> {review.notes.join(" ")}</div>}
+        {isScanning && <div role="status" className="mt-5 flex items-center gap-3 rounded-2xl bg-[#fff8ea] px-4 py-3 text-sm font-semibold leading-6 text-[#77684d]"><Image src="/mascots/pip-receipt.png" alt="" width={96} height={88} className="h-12 w-12 shrink-0 object-contain" aria-hidden="true" /><span><span className="mr-2 inline-block h-2 w-2 animate-pulse rounded-full bg-[#ed795d]" />{t("scan.readingReceipts", { receipts: uploadCount === 2 ? t("scan.bothReceipts") : t("scan.yourReceipt") })}</span></div>}
+        {notice && <p className="mt-5 rounded-2xl border border-[#ece9e2] bg-[#f7f6f1] px-4 py-3 text-sm leading-6 text-[#77766d]">{notice}</p>}
+        {error && <p role="alert" className="mt-5 rounded-2xl border border-[#f0c2b8] bg-[#fff0ed] px-4 py-3 text-sm font-semibold leading-6 text-[#b64e3a]">{error}</p>}
+        {review?.needsConfirmation && <div className="mt-5 rounded-2xl border border-[#e6a095] bg-[#fff5f2] px-4 py-3 text-sm leading-6 text-[#8d4135]"><strong>{t("scan.confirmMessage")}</strong> {review.notes.filter((note) => /receipt|transaction|merchant|date|total/i.test(note)).map((note) => localizeReviewNote(note, t)).join(" ")}</div>}
+        {review?.needsReview && <div className="mt-5 rounded-2xl border border-[#e6c66f] bg-[#fffaf0] px-4 py-3 text-sm leading-6 text-[#77684d]"><strong>{t("scan.reviewMessage")}</strong> {review.notes.map((note) => localizeReviewNote(note, t)).join(" ")}</div>}
 
         {!receipt ? (
-          <div className="grid min-h-[28rem] place-items-center rounded-3xl bg-[#fbfaf7] px-8 text-center">
+          <div className="grid min-h-[28rem] place-items-center rounded-[1.65rem] border border-dashed border-[#e4e0d7] bg-[#fbfaf7] px-8 text-center">
             <div>
-              <span className="mx-auto grid h-16 w-16 place-items-center rounded-3xl bg-white text-2xl shadow-sm" aria-hidden="true">⌁</span>
-              <h3 className="mt-5 text-lg font-extrabold">Your combined bill will show here</h3>
-              <p className="mx-auto mt-2 max-w-xs text-sm leading-6 text-[#929087]">Upload one or both receipts to review the merchant, items, tax, tip, and final charged amount.</p>
+              <Image src="/mascots/pip-receipt.png" alt={t("scan.pipAlt")} width={176} height={161} className="mx-auto h-24 w-24 object-contain drop-shadow-[0_12px_18px_rgba(111,77,65,0.12)]" />
+              <h3 className="mt-5 text-lg font-extrabold tracking-[-0.02em]">{t("scan.emptyTitle")}</h3>
+              <p className="mx-auto mt-2 max-w-xs text-sm leading-6 text-[#929087]">{t("scan.emptyDescription")}</p>
             </div>
           </div>
         ) : (
-          <div className="mt-6 space-y-5">
+          <div className="mt-6 space-y-5 scan-fade-in">
             <div className="grid gap-4 sm:grid-cols-[1fr_auto]">
               <label className="block">
-                <span className="text-xs font-bold uppercase tracking-[0.1em] text-[#99968d]">Merchant</span>
-                <input value={receipt.merchant} aria-invalid={fieldNeedsReview("merchant")} onChange={(event) => updateReceipt({ merchant: event.target.value })} className={`mt-2 min-h-12 w-full rounded-2xl border px-4 text-sm font-bold outline-none transition focus:border-[#ed795d] focus:ring-4 focus:ring-[#ed795d]/10 ${fieldNeedsReview("merchant") ? "border-[#e6c66f] bg-[#fffaf0]" : "border-[#e7e3da] bg-[#fbfaf7]"}`} />
+                <span className="text-[11px] font-extrabold uppercase tracking-[0.14em] text-[#99968d]">{t("scan.merchant")}</span>
+                <input value={receipt.merchant} aria-invalid={fieldNeedsReview("merchant")} onChange={(event) => updateReceipt({ merchant: event.target.value })} className={`mt-2 min-h-12 w-full rounded-2xl border px-4 text-sm font-bold outline-none transition duration-200 focus:border-[#ed795d] focus:bg-white focus:ring-4 focus:ring-[#ed795d]/10 ${fieldNeedsReview("merchant") ? "border-[#e6c66f] bg-[#fffaf0]" : "border-[#e7e3da] bg-[#fbfaf7]"}`} />
               </label>
               <label className="block">
-                <span className="text-xs font-bold uppercase tracking-[0.1em] text-[#99968d]">Date</span>
-                <input type="date" value={receipt.date} aria-invalid={fieldNeedsReview("date")} onChange={(event) => updateReceipt({ date: event.target.value })} className={`mt-2 min-h-12 w-full rounded-2xl border px-4 text-sm font-bold outline-none transition focus:border-[#ed795d] focus:ring-4 focus:ring-[#ed795d]/10 ${fieldNeedsReview("date") ? "border-[#e6c66f] bg-[#fffaf0]" : "border-[#e7e3da] bg-[#fbfaf7]"}`} />
+                <span className="text-[11px] font-extrabold uppercase tracking-[0.14em] text-[#99968d]">{t("scan.date")}</span>
+                <input type="date" value={receipt.date} aria-invalid={fieldNeedsReview("date")} onChange={(event) => updateReceipt({ date: event.target.value })} className={`mt-2 min-h-12 w-full rounded-2xl border px-4 text-sm font-bold outline-none transition duration-200 focus:border-[#ed795d] focus:bg-white focus:ring-4 focus:ring-[#ed795d]/10 ${fieldNeedsReview("date") ? "border-[#e6c66f] bg-[#fffaf0]" : "border-[#e7e3da] bg-[#fbfaf7]"}`} />
               </label>
             </div>
 
-            <div className="rounded-3xl bg-[#fbfaf7] p-4 sm:p-5">
-              <div className="mb-3 flex items-center justify-between"><h3 className="text-sm font-extrabold">Items</h3><button type="button" onClick={addItem} className="text-xs font-extrabold text-[#ed795d] hover:text-[#d95f45]">+ Add item</button></div>
+            <div className="rounded-3xl border border-[#eeeae2] bg-[#fbfaf7] p-4 sm:p-5">
+              <div className="mb-4 flex items-center justify-between"><div><h3 className="text-sm font-extrabold">{t("scan.items")}</h3><p className="mt-1 text-xs text-[#aaa69c]">{t("scan.editMissed")}</p></div><button type="button" onClick={addItem} className="rounded-full bg-white px-3 py-2 text-xs font-extrabold text-[#ed795d] shadow-sm transition hover:-translate-y-0.5 hover:bg-[#fff5f1] hover:text-[#d95f45]">{t("scan.addItem")}</button></div>
               <div className="space-y-3">
                 {receipt.items.map((item, index) => (
-                  <div key={item.id} className="grid grid-cols-[minmax(0,1fr)_4.5rem_5.5rem_auto] items-center gap-2 border-b border-[#eae7df] pb-3 last:border-0 last:pb-0 sm:grid-cols-[minmax(0,1fr)_5rem_6rem_auto]">
-                    <label className="min-w-0"><span className="sr-only">Item name</span><input value={item.name} aria-invalid={fieldNeedsReview(`items[${index}].name`)} onChange={(event) => updateItem(item.id, { name: event.target.value })} className={`min-h-10 w-full min-w-0 rounded-xl border px-3 text-sm font-bold outline-none transition focus:border-[#ed795d] ${fieldNeedsReview(`items[${index}].name`) ? "border-[#e6c66f] bg-[#fffaf0]" : "border-transparent bg-white"}`} /></label>
-                    <label><span className="sr-only">Quantity for {item.name}</span><input type="number" min="1" step="1" value={item.quantity} aria-invalid={fieldNeedsReview(`items[${index}].quantity`)} onChange={(event) => updateItem(item.id, { quantity: Math.max(1, Number(event.target.value) || 1) })} className={`min-h-10 w-full rounded-xl border px-2 text-center text-sm outline-none transition focus:border-[#ed795d] ${fieldNeedsReview(`items[${index}].quantity`) ? "border-[#e6c66f] bg-[#fffaf0]" : "border-transparent bg-white"}`} /></label>
-                    <label><span className="sr-only">Price for {item.name}</span><input type="number" min="0" step="0.01" value={item.unitPrice} aria-invalid={fieldNeedsReview(`items[${index}].unit_price`)} onChange={(event) => updateItem(item.id, { unitPrice: Math.max(0, Number(event.target.value) || 0) })} className={`min-h-10 w-full rounded-xl border px-2 text-right text-sm font-bold outline-none transition focus:border-[#ed795d] ${fieldNeedsReview(`items[${index}].unit_price`) ? "border-[#e6c66f] bg-[#fffaf0]" : "border-transparent bg-white"}`} /></label>
-                    <button type="button" onClick={() => removeItem(item.id)} className="grid h-9 w-9 place-items-center rounded-xl text-lg text-[#b6b2a8] hover:bg-white hover:text-[#ed795d]" aria-label={`Remove ${item.name}`}>×</button>
+                  <div key={item.id} className="grid grid-cols-[minmax(0,1fr)_4.25rem_5rem_auto] items-center gap-2 border-b border-[#eae7df] pb-3 transition last:border-0 last:pb-0 sm:grid-cols-[minmax(0,1fr)_5rem_6rem_auto]">
+                    <label className="min-w-0"><span className="sr-only">{t("scan.itemNameAria")}</span><input value={item.name} aria-invalid={fieldNeedsReview(`items[${index}].name`)} onChange={(event) => updateItem(item.id, { name: event.target.value })} className={`min-h-10 w-full min-w-0 rounded-xl border px-3 text-sm font-bold outline-none transition focus:border-[#ed795d] focus:ring-2 focus:ring-[#ed795d]/10 ${fieldNeedsReview(`items[${index}].name`) ? "border-[#e6c66f] bg-[#fffaf0]" : "border-transparent bg-white"}`} /></label>
+                    <label><span className="sr-only">{t("scan.quantityAria", { name: item.name })}</span><input type="number" min="1" step="1" value={item.quantity} aria-invalid={fieldNeedsReview(`items[${index}].quantity`)} onChange={(event) => updateItem(item.id, { quantity: Math.max(1, Number(event.target.value) || 1) })} className={`min-h-10 w-full rounded-xl border px-2 text-center text-sm outline-none transition focus:border-[#ed795d] focus:ring-2 focus:ring-[#ed795d]/10 ${fieldNeedsReview(`items[${index}].quantity`) ? "border-[#e6c66f] bg-[#fffaf0]" : "border-transparent bg-white"}`} /></label>
+                    <label><span className="sr-only">{t("scan.priceAria", { name: item.name })}</span><input type="number" min="0" step="0.01" value={item.unitPrice} aria-invalid={fieldNeedsReview(`items[${index}].unit_price`)} onChange={(event) => updateItem(item.id, { unitPrice: Math.max(0, Number(event.target.value) || 0) })} className={`min-h-10 w-full rounded-xl border px-2 text-right text-sm font-bold outline-none transition focus:border-[#ed795d] focus:ring-2 focus:ring-[#ed795d]/10 ${fieldNeedsReview(`items[${index}].unit_price`) ? "border-[#e6c66f] bg-[#fffaf0]" : "border-transparent bg-white"}`} /></label>
+                    <button type="button" onClick={() => removeItem(item.id)} className="grid h-9 w-9 place-items-center rounded-xl text-lg text-[#b6b2a8] transition hover:bg-white hover:text-[#ed795d]" aria-label={t("scan.removeItemAria", { name: item.name })}>×</button>
                   </div>
                 ))}
               </div>
-              <div className="mt-3 grid grid-cols-[minmax(0,1fr)_4.5rem_5.5rem_auto] gap-2 px-3 text-[10px] font-bold uppercase tracking-[0.08em] text-[#aaa69c] sm:grid-cols-[minmax(0,1fr)_5rem_6rem_auto]"><span /><span className="text-center">Qty</span><span className="text-right">Each</span><span /></div>
+              <div className="mt-3 grid grid-cols-[minmax(0,1fr)_4.25rem_5rem_auto] gap-2 px-3 text-[10px] font-bold uppercase tracking-[0.08em] text-[#aaa69c] sm:grid-cols-[minmax(0,1fr)_5rem_6rem_auto]"><span /><span className="text-center">{t("scan.quantity")}</span><span className="text-right">{t("scan.each")}</span><span /></div>
             </div>
 
             <div className="grid gap-3 sm:grid-cols-2">
-              <label className="flex items-center justify-between rounded-2xl bg-[#f7f6f1] px-4 py-3 text-sm text-[#77766d]"><span>Tax</span><span className="flex items-center gap-1 font-bold text-[#25251f]"><span>$</span><input type="number" min="0" step="0.01" value={receipt.tax} aria-invalid={fieldNeedsReview("tax")} onChange={(event) => updateReceipt({ tax: Math.max(0, Number(event.target.value) || 0) })} className={`w-16 rounded px-1 text-right outline-none ${fieldNeedsReview("tax") ? "bg-[#fffaf0]" : "bg-transparent"}`} /></span></label>
-              <label className="flex items-center justify-between rounded-2xl bg-[#f7f6f1] px-4 py-3 text-sm text-[#77766d]"><span>Tip</span><span className="flex items-center gap-1 font-bold text-[#25251f]"><span>$</span><input type="number" min="0" step="0.01" placeholder="Enter" value={tipNeedsManualEntry ? "" : receipt.tip} aria-invalid={fieldNeedsReview("tip")} onChange={(event) => { setTipManuallyEdited(true); updateReceipt({ tip: event.target.value === "" ? 0 : Math.max(0, Number(event.target.value) || 0) }); }} className={`w-20 rounded px-1 text-right outline-none placeholder:text-[#aaa69c] ${fieldNeedsReview("tip") ? "bg-[#fffaf0]" : "bg-transparent"}`} /></span></label>
+              <label className="flex items-center justify-between rounded-2xl border border-[#eeeae2] bg-[#f7f6f1] px-4 py-3 text-sm text-[#77766d] transition focus-within:border-[#ed795d] focus-within:bg-white"><span>{t("scan.tax")}</span><span className="flex items-center gap-1 font-bold text-[#25251f]"><span>$</span><input type="number" min="0" step="0.01" value={receipt.tax} aria-invalid={fieldNeedsReview("tax")} onChange={(event) => updateReceipt({ tax: Math.max(0, Number(event.target.value) || 0) })} className={`w-16 rounded px-1 text-right outline-none ${fieldNeedsReview("tax") ? "bg-[#fffaf0]" : "bg-transparent"}`} /></span></label>
+              <label className="flex items-center justify-between rounded-2xl border border-[#eeeae2] bg-[#f7f6f1] px-4 py-3 text-sm text-[#77766d] transition focus-within:border-[#ed795d] focus-within:bg-white"><span>{t("scan.tip")}</span><span className="flex items-center gap-1 font-bold text-[#25251f]"><span>$</span><input type="number" min="0" step="0.01" placeholder={t("scan.enter")} value={tipNeedsManualEntry ? "" : receipt.tip} aria-invalid={fieldNeedsReview("tip")} onChange={(event) => { setTipManuallyEdited(true); updateReceipt({ tip: event.target.value === "" ? 0 : Math.max(0, Number(event.target.value) || 0) }); }} className={`w-20 rounded px-1 text-right outline-none placeholder:text-[#aaa69c] ${fieldNeedsReview("tip") ? "bg-[#fffaf0]" : "bg-transparent"}`} /></span></label>
             </div>
 
-            <div className={`rounded-3xl p-5 text-white ${fieldNeedsReview("total") ? "border-2 border-[#e6c66f] bg-[#302d24]" : "bg-[#25251f]"}`}>
-              <div className="flex items-center justify-between text-sm text-[#c7c4bb]"><span>Subtotal</span><span>{money.format(calculatedSubtotal)}</span></div>
-              <div className="mt-2 flex items-center justify-between text-sm text-[#c7c4bb]"><span>Tax &amp; tip</span><span>{money.format(receipt.tax + receipt.tip)}</span></div>
+            <div className={`rounded-[1.65rem] p-5 text-white shadow-[0_16px_34px_rgba(37,37,31,0.16)] ${fieldNeedsReview("total") ? "border-2 border-[#e6c66f] bg-[#302d24]" : "bg-[#25251f]"}`}>
+              <div className="flex items-center justify-between text-sm text-[#c7c4bb]"><span>{t("scan.subtotal")}</span><span>{money.format(calculatedSubtotal)}</span></div>
+              <div className="mt-2 flex items-center justify-between text-sm text-[#c7c4bb]"><span>{t("scan.taxAndTip")}</span><span>{money.format(receipt.tax + receipt.tip)}</span></div>
               <div className="my-4 border-t border-white/15" />
-              <div className="flex items-end justify-between"><span className="font-bold">Charged total</span><strong className="text-3xl font-extrabold tracking-tight">{money.format(receipt.total)}</strong></div>
-              {Math.abs(receipt.total - calculatedTotal) > 0.05 && <p className="mt-3 text-xs leading-5 text-[#f4d578]">Calculated from the editable fields: {money.format(calculatedTotal)}. Confirm the discrepancy above.</p>}
+              <div className="flex items-end justify-between"><span className="font-bold">{t("scan.chargedTotal")}</span><strong className="text-3xl font-extrabold tracking-tight">{money.format(receipt.total)}</strong></div>
+              {Math.abs(receipt.total - calculatedTotal) > 0.05 && <p className="mt-3 text-xs leading-5 text-[#f4d578]">{t("scan.calculatedFromFields", { amount: money.format(calculatedTotal) })}</p>}
             </div>
 
-            <button type="button" className="min-h-14 w-full rounded-2xl bg-[#ed795d] px-6 text-base font-extrabold text-white shadow-[0_10px_24px_rgba(237,121,93,0.2)] transition hover:-translate-y-0.5 hover:bg-[#e86b4e] focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-[#ed795d]">Continue to split <span aria-hidden="true">→</span></button>
-            <p className="text-center text-xs leading-5 text-[#a19e93]">Next, you’ll assign each item to people in your group.</p>
+            <button type="button" className="group min-h-14 w-full rounded-2xl bg-[#ed795d] px-6 text-base font-extrabold text-white shadow-[0_10px_24px_rgba(237,121,93,0.2)] transition duration-200 hover:-translate-y-0.5 hover:bg-[#e86b4e] hover:shadow-[0_14px_28px_rgba(237,121,93,0.28)] focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-[#ed795d]">{t("scan.continueToSplit")} <span aria-hidden="true" className="ml-1 inline-block transition group-hover:translate-x-1">→</span></button>
+            <p className="text-center text-xs leading-5 text-[#a19e93]">{t("scan.nextAssignItems")}</p>
           </div>
         )}
       </section>
