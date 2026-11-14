@@ -6,7 +6,7 @@
 - Each developer should work on their assigned feature branch and open a pull request to `main` for the other developer to review.
 - Agree on the files and interface changes before editing shared contracts. Keep `src/types/index.ts` stable while the two feature branches are in progress.
 - `feature/frontend` owns group management, UI, item splitting, tax/tip calculations, and settlement.
-- `feature/ai-scanner` owns receipt upload, Anthropic Claude API integration, and receipt recognition/extraction.
+- `feature/ai-scanner` owns receipt upload, OpenAI Responses API integration, and receipt recognition/extraction.
 - Pull or rebase from `main` before starting and before opening a pull request. Resolve conflicts together, especially in shared files.
 - Make small commits with clear messages. Never commit `.env.local`, API keys, customer data, or generated build output.
 - Run `npm run typecheck` and `npm run build` before asking for review. Do not merge without both developers reviewing the change.
@@ -17,10 +17,11 @@ Import `Group`, `Member`, `Receipt`, `ReceiptItem`, and `Expense` from `@/types`
 
 ## Receipt recognition configuration
 
-- The planned receipt recognition provider is Anthropic Claude.
-- Use `ANTHROPIC_API_KEY` for local development, stored only in the ignored `.env.local` file.
+- Receipt recognition uses the OpenAI Responses API with an image-capable model.
+- Use `OPENAI_API_KEY` for local development, stored only in the ignored `.env.local` file.
+- `OPENAI_RECEIPT_MODEL` is optional and defaults to `gpt-5.4-mini`.
 - Keep `.env.example` as a key-free template. Do not add API keys to source files, commits, or pull requests.
-- The Claude API integration is not implemented in the foundation; the mock receipt remains available without credentials.
+- The sample receipt remains available through `GET /api/receipt` without credentials; real uploads use `POST /api/receipt/scan` and fail clearly when the key is missing.
 
 <!-- BEGIN:nextjs-agent-rules -->
 
