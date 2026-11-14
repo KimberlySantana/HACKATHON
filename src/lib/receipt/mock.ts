@@ -1,6 +1,6 @@
 import type { Receipt } from "@/types";
 
-/** Sample receipt used by the UI and API route without an OpenAI API key. */
+/** Sample receipt used by the UI and API route without API credentials. */
 export const mockReceipt: Receipt = {
   id: "receipt-demo-001",
   groupId: "group-demo",
