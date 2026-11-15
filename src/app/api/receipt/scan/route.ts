@@ -5,6 +5,10 @@ import type { Receipt, ReceiptItem } from "@/types";
 import type { ReceiptReview, ReceiptScanResult } from "@/lib/receipt/extraction";
 import { validateScanContentLength, validateScanImage, validateScanTotalSize } from "@/lib/receipt/upload-validation";
 
+function scannerError(code: string, error: string, status: number) {
+  return NextResponse.json({ code, error }, { status, headers: { "Cache-Control": "no-store" } });
+}
+
 const extractionSchema = {
   type: "object",
   additionalProperties: false,
@@ -311,19 +315,37 @@ export async function POST(request: Request) {
     }
   }
 
+  const authorization = request.headers.get("authorization");
+  const bearerMatch = authorization?.match(/^Bearer\s+(.+)$/i);
+  const accessToken = bearerMatch?.[1];
+  if (!accessToken) return scannerError("AUTH_REQUIRED", "Sign in before using receipt scanning.", 401);
+
   let supabase;
+  let userId: string;
   try {
-    supabase = await createClient();
-    const { data: { user }, error: authError } = await supabase.auth.getUser();
+    supabase = await createClient(accessToken);
+    const { data: { user }, error: authError } = await supabase.auth.getUser(accessToken);
     if (authError || !user) {
-      return NextResponse.json({ error: "Sign in before using receipt scanning." }, { status: 401, headers: { "Cache-Control": "no-store" } });
+      const status = authError && "status" in authError ? authError.status : undefined;
+      if (status === 0 || (typeof status === "number" && status >= 500)) {
+        console.warn("Receipt scan authentication check unavailable", { code: "AUTH_UNAVAILABLE", status });
+        return scannerError("AUTH_UNAVAILABLE", "Sign-in verification is temporarily unavailable. Please try again.", 503);
+      }
+      if (authError) {
+        console.warn("Receipt scan token rejected", { code: "AUTH_INVALID", status });
+        return scannerError("AUTH_INVALID", "Your sign-in session is expired or invalid. Refresh your sign-in, then retry.", 401);
+      }
+      console.warn("Receipt scan token had no verified user", { code: "AUTH_INVALID" });
+      return scannerError("AUTH_INVALID", "Your sign-in session is expired or invalid. Refresh your sign-in, then retry.", 401);
     }
+    userId = user.id;
   } catch {
-    return NextResponse.json({ error: "Sign-in verification is unavailable. Please try again." }, { status: 503, headers: { "Cache-Control": "no-store" } });
+    console.warn("Receipt scan authentication client unavailable", { code: "AUTH_UNAVAILABLE", status: 503 });
+    return scannerError("AUTH_UNAVAILABLE", "Sign-in verification is unavailable. Please try again.", 503);
   }
 
   if (!process.env.OPENAI_API_KEY) {
-    return NextResponse.json({ error: "Receipt scanning is not configured yet. Add OPENAI_API_KEY to the server environment." }, { status: 503, headers: { "Cache-Control": "no-store" } });
+    return scannerError("OPENAI_NOT_CONFIGURED", "Receipt scanning is unavailable because the server OpenAI key is not configured.", 503);
   }
 
   const contentLengthError = validateScanContentLength(request.headers.get("content-length"));
@@ -360,12 +382,34 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: invalidUpload.validationError }, { status: 400, headers: { "Cache-Control": "no-store" } });
     }
 
+    const groupId = formData.get("groupId");
+    if (typeof groupId !== "string" || !groupId) {
+      return scannerError("GROUP_FORBIDDEN", "Choose a cloud group you own before scanning.", 403);
+    }
+    const { data: ownedGroup, error: groupError } = await supabase
+      .from("groups")
+      .select("id")
+      .eq("id", groupId)
+      .eq("owner_id", userId)
+      .maybeSingle();
+    if (groupError) {
+      console.warn("Receipt scan group authorization check failed", { code: "GROUP_CHECK_FAILED", databaseCode: groupError.code });
+      return scannerError("GROUP_CHECK_FAILED", "Could not verify access to this group. Please try again.", 503);
+    }
+    if (!ownedGroup) {
+      console.warn("Receipt scan group authorization denied", { code: "GROUP_FORBIDDEN" });
+      return scannerError("GROUP_FORBIDDEN", "This group is not available to the signed-in account. Choose one of your cloud groups.", 403);
+    }
+
     const { data: quotaReserved, error: quotaError } = await supabase.rpc("reserve_receipt_scan");
     if (quotaError) {
-      return NextResponse.json({ error: "Secure scan limits are not configured yet. Apply the receipt scan usage migration, then try again." }, { status: 503, headers: { "Cache-Control": "no-store" } });
+      const migrationMissing = quotaError.code === "PGRST202" || quotaError.code === "42883" || /could not find the function|function .* does not exist/i.test(quotaError.message);
+      return migrationMissing
+        ? scannerError("QUOTA_NOT_CONFIGURED", "Secure scan limits are not configured yet. Apply the receipt scan usage migration, then try again.", 503)
+        : scannerError("QUOTA_CHECK_FAILED", "Could not verify the daily scan limit. Please check your connection and try again.", 503);
     }
     if (quotaReserved !== true) {
-      return NextResponse.json({ error: "The daily receipt scanning limit has been reached. Try again tomorrow." }, { status: 429, headers: { "Cache-Control": "no-store" } });
+      return scannerError("QUOTA_EXCEEDED", "The daily receipt scanning limit has been reached. Try again tomorrow.", 429);
     }
 
     const uploadParts = validatedUploads.map((upload) => [
@@ -405,6 +449,6 @@ export async function POST(request: Request) {
     return NextResponse.json(mergeExtraction(extracted, uploads.length));
   } catch {
     console.error("OpenAI multi-receipt extraction failed.");
-    return NextResponse.json({ error: "Receipt recognition failed. Please try again or check the images." }, { status: 502 });
+    return scannerError("SCAN_FAILED", "Receipt recognition failed. Please try again or check the images.", 502);
   }
 }

@@ -6,9 +6,10 @@ import Image from "next/image";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useLanguage } from "@/components/i18n";
-import { useAuth } from "@/components/groups/auth-provider";
+import { AuthSessionInvalidError, useAuth } from "@/components/groups/auth-provider";
 import { useSavedGroups } from "@/components/groups/use-saved-groups";
 import { createReceiptExpenseDraft, receiptDraftStorageKey } from "@/lib/receipt/draft";
+import { getScanErrorTranslationKey } from "@/lib/receipt/scan-errors";
 import { MAX_SCAN_FILE_BYTES, MAX_SCAN_TOTAL_FILE_BYTES } from "@/lib/receipt/upload-validation";
 import { groupExpenseHref } from "@/lib/groups/form";
 import type { ReceiptReview, ReceiptScanResult } from "@/lib/receipt/extraction";
@@ -49,7 +50,9 @@ async function compressImage(file: File) {
   }
 }
 
-function localizeServerError(message: string, t: Translator) {
+function localizeServerError(message: string, t: Translator, code?: string) {
+  const translationKey = getScanErrorTranslationKey(code);
+  if (translationKey) return t(translationKey);
   if (message.includes("not configured")) return t("error.notConfigured");
   if (message.includes("Upload an itemized receipt")) return t("error.noUploads");
   if (message.includes("must be a JPEG")) {
@@ -111,7 +114,7 @@ function localizeReviewNote(note: string, t: Translator) {
 export default function ScanWorkspace({ initialGroupId }: { initialGroupId: string }) {
   const router = useRouter();
   const { t } = useLanguage();
-  const { user, loading: authLoading } = useAuth();
+  const { user, loading: authLoading, getAccessToken } = useAuth();
   const { groups, loading: groupsLoading } = useSavedGroups();
   const [groupId, setGroupId] = useState(initialGroupId);
   const [selectedFiles, setSelectedFiles] = useState<SelectedFiles>({ itemized: null, payment: null });
@@ -126,6 +129,8 @@ export default function ScanWorkspace({ initialGroupId }: { initialGroupId: stri
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const scanRequestId = useRef(0);
+  const photoInputRefs = useRef<Partial<Record<ReceiptRole, HTMLInputElement | null>>>({});
+  const uploadInputRefs = useRef<Partial<Record<ReceiptRole, HTMLInputElement | null>>>({});
 
   useEffect(() => setGroupId(initialGroupId), [initialGroupId]);
 
@@ -163,8 +168,6 @@ export default function ScanWorkspace({ initialGroupId }: { initialGroupId: stri
     if (uploads.length === 0) return;
     if (!groupId) { setError("Choose a group before scanning a receipt."); return; }
     if (!activeGroup || groupsLoading) { setError("Choose a group that is available in the current account."); return; }
-    if (!user) { setError("Sign in before using AI receipt scanning. The sample receipt is available for local preview."); return; }
-
     const requestId = scanRequestId.current + 1;
     scanRequestId.current = requestId;
     setIsScanning(true);
@@ -177,13 +180,28 @@ export default function ScanWorkspace({ initialGroupId }: { initialGroupId: stri
     setNotice(t("scan.readingReceipts", { receipts: uploads.length === 2 ? t("scan.bothReceipts") : t("scan.yourReceipt") }));
 
     try {
+      let accessToken: string | null;
+      try {
+        accessToken = await getAccessToken();
+      } catch (authError) {
+        if (authError instanceof AuthSessionInvalidError) throw new Error(t("error.authInvalid"));
+        throw new Error(t("error.authUnavailable"));
+      }
+      if (!accessToken) throw new Error(t("error.notAuthenticated"));
+
       const formData = new FormData();
+      formData.append("groupId", groupId);
       if (files.itemized) formData.append("itemizedFile", files.itemized.file);
       if (files.payment) formData.append("paymentFile", files.payment.file);
 
-      const response = await fetch("/api/receipt/scan", { method: "POST", body: formData });
-      const payload = (await response.json().catch(() => ({}))) as Partial<ReceiptScanResult> & { error?: string };
-      if (!response.ok) throw new Error(localizeServerError(payload.error || t("error.recognitionFailed"), t));
+      const response = await fetch("/api/receipt/scan", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { Authorization: `Bearer ${accessToken}` },
+        body: formData,
+      });
+      const payload = (await response.json().catch(() => ({}))) as Partial<ReceiptScanResult> & { error?: string; code?: string };
+      if (!response.ok) throw new Error(localizeServerError(payload.error || t("error.recognitionFailed"), t, payload.code));
       if (!payload.receipt || !payload.review) throw new Error(t("error.incompleteResponse"));
       if (requestId !== scanRequestId.current) return;
 
@@ -202,7 +220,7 @@ export default function ScanWorkspace({ initialGroupId }: { initialGroupId: stri
       if (requestId !== scanRequestId.current) return;
       setReceipt(null);
       setReview(null);
-      setError(scanError instanceof Error ? scanError.message : t("error.tryAgain"));
+      setError(scanError instanceof TypeError ? t("error.network") : scanError instanceof Error ? scanError.message : t("error.tryAgain"));
       setNotice(null);
     } finally {
       if (requestId === scanRequestId.current) setIsScanning(false);
@@ -211,7 +229,7 @@ export default function ScanWorkspace({ initialGroupId }: { initialGroupId: stri
 
   async function handleFile(role: ReceiptRole, file: File) {
     if (!new Set(["image/jpeg", "image/png", "image/webp"]).has(file.type)) {
-      setError(t("error.invalidImage"));
+      setError(t("error.unsupportedImage"));
       return;
     }
 
@@ -220,8 +238,7 @@ export default function ScanWorkspace({ initialGroupId }: { initialGroupId: stri
       return;
     }
 
-    if (authLoading || groupsLoading) { setError("Wait for sign-in and group status to finish loading, then try again."); return; }
-    if (!user) { setError("Sign in before using AI receipt scanning. The sample receipt is available for local preview."); return; }
+    if (groupsLoading) { setError("Wait for group status to finish loading, then try again."); return; }
     if (!groupId || !activeGroup) { setError("Choose a group that is available in the current account before uploading."); return; }
 
     setIsLoading(true);
@@ -243,7 +260,7 @@ export default function ScanWorkspace({ initialGroupId }: { initialGroupId: stri
       setReview(null);
       setReceiptReviewed(false);
       setTransactionConfirmed(false);
-      void scanReceipts(nextFiles);
+      setNotice(t("scan.readyToScan"));
     } catch (uploadError) {
       setError(uploadError instanceof Error ? uploadError.message : t("error.tryAgain"));
     } finally {
@@ -257,7 +274,7 @@ export default function ScanWorkspace({ initialGroupId }: { initialGroupId: stri
     event.target.value = "";
   }
 
-  function handleDrop(role: ReceiptRole, event: DragEvent<HTMLLabelElement>) {
+  function handleDrop(role: ReceiptRole, event: DragEvent<HTMLDivElement>) {
     event.preventDefault();
     setIsDragging(null);
     const file = event.dataTransfer.files[0];
@@ -277,7 +294,7 @@ export default function ScanWorkspace({ initialGroupId }: { initialGroupId: stri
     setTransactionConfirmed(false);
     setError(null);
     if (nextFiles.itemized || nextFiles.payment) {
-      void scanReceipts(nextFiles);
+      setNotice(t("scan.readyToScan"));
     } else {
       scanRequestId.current += 1;
       setIsScanning(false);
@@ -375,21 +392,25 @@ export default function ScanWorkspace({ initialGroupId }: { initialGroupId: stri
               const selectedFile = selectedFiles[slot.role];
               return (
                 <div key={slot.role} className="min-w-0">
-                  <label
-                    htmlFor={`${slot.role}-receipt-upload`}
+                  <div
                     onDragEnter={() => setIsDragging(slot.role)}
                     onDragOver={(event) => event.preventDefault()}
                     onDragLeave={() => setIsDragging(null)}
                     onDrop={(event) => handleDrop(slot.role, event)}
-                    className={`group relative flex min-h-52 cursor-pointer flex-col items-center justify-center overflow-hidden rounded-[1.65rem] border-2 border-dashed px-4 text-center transition duration-300 hover:-translate-y-0.5 hover:shadow-[0_14px_30px_rgba(76,67,51,0.08)] focus-within:ring-4 focus-within:ring-[#ed795d]/10 ${isDragging === slot.role ? "border-[#ed795d] bg-[#fff5f1] shadow-[0_14px_30px_rgba(237,121,93,0.12)]" : "border-[#dedbd1] bg-[#fbfaf7] hover:border-[#ed795d] hover:bg-[#fffaf7]"}`}
+                    className={`group relative flex min-h-40 flex-col items-center justify-center overflow-hidden rounded-[1.65rem] border-2 border-dashed px-4 text-center transition duration-300 ${isDragging === slot.role ? "border-[#ed795d] bg-[#fff5f1] shadow-[0_14px_30px_rgba(237,121,93,0.12)]" : "border-[#dedbd1] bg-[#fbfaf7]"}`}
                   >
                     <span className="pointer-events-none absolute -right-8 -top-8 h-24 w-24 rounded-full bg-[#f7d7c9]/40 transition duration-300 group-hover:scale-125" aria-hidden="true" />
                     {selectedFile ? <img src={selectedFile.previewUrl} alt={`${slot.label} preview`} className="relative h-16 w-16 rounded-2xl object-cover shadow-[0_8px_18px_rgba(76,67,51,0.14)]" /> : <span className="relative grid h-14 w-14 place-items-center rounded-2xl bg-white text-xl text-[#ed795d] shadow-[0_8px_18px_rgba(76,67,51,0.08)] transition duration-300 group-hover:rotate-3 group-hover:scale-105" aria-hidden="true">↑</span>}
                     <span className="relative mt-4 text-sm font-extrabold tracking-[-0.01em]">{slot.label}</span>
                     <span className="relative mt-1 text-xs leading-5 text-[#929087]">{selectedFile ? `${(selectedFile.file.size / 1024 / 1024).toFixed(1)} MB · ${isScanning ? t("scan.analyzingReceipts") : t("scan.readyToReview")}` : slot.description}</span>
-                    {!selectedFile && <span className="relative mt-3 rounded-full bg-white px-3 py-1.5 text-[10px] font-extrabold uppercase tracking-[0.12em] text-[#a19e93] shadow-sm transition group-hover:text-[#ed795d]">{t("scan.chooseImage")}</span>}
-                    <input id={`${slot.role}-receipt-upload`} type="file" accept="image/jpeg,image/png,image/webp" onChange={(event) => handleFileChange(slot.role, event)} className="sr-only" />
-                  </label>
+                    {!selectedFile && <span className="relative mt-3 text-xs font-semibold text-[#a19e93]">{t("scan.chooseImage")}</span>}
+                  </div>
+                  <input ref={(element) => { photoInputRefs.current[slot.role] = element; }} id={`${slot.role}-camera-input`} type="file" accept="image/*" capture="environment" onChange={(event) => handleFileChange(slot.role, event)} className="sr-only" />
+                  <input ref={(element) => { uploadInputRefs.current[slot.role] = element; }} id={`${slot.role}-upload-input`} type="file" accept="image/*" onChange={(event) => handleFileChange(slot.role, event)} className="sr-only" />
+                  <div className="mt-3 grid grid-cols-2 gap-2">
+                    <button type="button" onClick={() => photoInputRefs.current[slot.role]?.click()} disabled={isLoading || isScanning} className="min-h-11 rounded-xl border border-border bg-white px-2 text-sm font-semibold text-primary transition hover:bg-surface-muted focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary disabled:opacity-60" aria-label={`${t("scan.takePhoto")} — ${slot.label}`}>{t("scan.takePhoto")}</button>
+                    <button type="button" onClick={() => uploadInputRefs.current[slot.role]?.click()} disabled={isLoading || isScanning} className="min-h-11 rounded-xl border border-border bg-white px-2 text-sm font-semibold text-primary transition hover:bg-surface-muted focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary disabled:opacity-60" aria-label={`${t("scan.uploadImage")} — ${slot.label}`}>{t("scan.uploadImage")}</button>
+                  </div>
                   {selectedFile && <button type="button" onClick={() => removeFile(slot.role)} aria-label={`Remove ${slot.label}`} className="mt-2 min-h-10 w-full rounded-xl py-1.5 text-xs font-bold text-[#99968d] transition hover:bg-[#fff5f1] hover:text-[#ed795d]">{t("scan.remove", { label: slot.label })}</button>}
                 </div>
               );
@@ -397,6 +418,7 @@ export default function ScanWorkspace({ initialGroupId }: { initialGroupId: stri
           </div>
 
           <p className="mt-4 text-center text-xs leading-5 text-[#929087]">JPEG, PNG, or WEBP · each image is compressed to fit the 4 MB secure request limit.</p>
+          <p className="mt-2 text-center text-xs leading-5 text-[#929087]">{t("scan.cameraFallback")}</p>
           {!user && !authLoading && <p role="status" className="mt-4 rounded-xl border border-[#eadbb7] bg-warning-soft px-3.5 py-3 text-sm leading-5 text-[#75511e]">Sign in with the account that owns this group to use paid receipt scanning. You can still load the local sample.</p>}
           {!activeGroup && !groupsLoading && groupId && <p role="alert" className="mt-4 rounded-xl border border-[#f0d3cd] bg-danger-soft px-3.5 py-3 text-sm leading-5 text-danger">This group is unavailable to the current account. Return to Groups and open the group again.</p>}
 
@@ -410,7 +432,10 @@ export default function ScanWorkspace({ initialGroupId }: { initialGroupId: stri
             {isLoading ? t("scan.loadingDemo") : isScanning ? t("scan.analyzingReceipts") : t("scan.trySample")}
             {!isLoading && !isScanning && <span aria-hidden="true">↗</span>}
           </button>
-          {uploadCount > 0 && !isScanning && <button type="button" onClick={() => void scanReceipts(selectedFiles)} disabled={isLoading || isScanning} className="mt-2 min-h-10 w-full rounded-xl px-3 text-xs font-semibold text-primary hover:bg-[#f3f7f3] disabled:opacity-50">Rescan selected images</button>}
+          {uploadCount > 0 && !isScanning && <div className="mt-3">
+            <p className="mb-2 text-center text-xs text-muted">{t("scan.scanUsageNote")}</p>
+            <button type="button" onClick={() => void scanReceipts(selectedFiles)} disabled={isLoading || isScanning} className="min-h-12 w-full rounded-xl bg-primary px-4 text-sm font-bold text-white transition hover:bg-primary-hover focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary disabled:opacity-50">{receipt ? t("scan.rescanWithAI") : t("scan.scanWithAI")}</button>
+          </div>}
 
           <p className="mt-4 text-center text-xs leading-5 text-[#a19e93]">{t("scan.imagesNotice")}</p>
         </section>
