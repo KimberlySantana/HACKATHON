@@ -7,7 +7,7 @@
     "build": "next build --webpack",
     "start": "next start",
     "typecheck": "tsc --noEmit",
-    "test": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types --test src/lib/groups/storage.test.mjs src/lib/expenses/calculations.test.mjs src/lib/expenses/cloud.test.mjs src/lib/expenses/assignments.test.mjs src/lib/splitting/receipt.test.mjs src/lib/currency/money.test.mjs src/lib/currency/preferences.test.mjs src/lib/currency/rates.test.mjs"
+    "test": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types --test src/lib/groups/storage.test.mjs src/lib/expenses/calculations.test.mjs src/lib/expenses/cloud.test.mjs src/lib/expenses/assignments.test.mjs src/lib/expenses/settlement-report.test.mjs src/lib/expenses/settlement-pdf.test.mjs src/lib/splitting/receipt.test.mjs src/lib/currency/money.test.mjs src/lib/currency/preferences.test.mjs src/lib/currency/rates.test.mjs src/lib/finance/percentages.test.mjs"
   },
   "dependencies": {
     "@supabase/ssr": "^0.12.7",

@@ -10,6 +10,8 @@ import { getUnassignedItems } from "@/lib/expenses/assignments";
 import { isLegacyCloudSchemaCurrencyError } from "@/lib/expenses/cloud";
 import type { ExpenseRecord } from "@/lib/expenses/types";
 import { CurrencyAmount } from "@/components/currency";
+import { SettlementActions, SettlementPrintReport } from "@/components/expenses/settlement-actions";
+import { buildSettlementReport } from "@/lib/expenses/settlement-report";
 
 export function SettlementSummary({ groupId }: { groupId: string }) {
   const { t } = useLanguage();
@@ -29,6 +31,11 @@ export function SettlementSummary({ groupId }: { groupId: string }) {
     try { return calculateSettlement(store.expenses, saved.members); }
     catch { return null; }
   }, [expensesNeedingAssignment.length, saved, store.expenses]);
+  const report = useMemo(() => {
+    if (!saved || !totals || expensesNeedingAssignment.length > 0) return null;
+    try { return buildSettlementReport(saved.group.name, store.expenses, saved.members, totals); }
+    catch { return null; }
+  }, [expensesNeedingAssignment.length, saved, store.expenses, totals]);
   const names = new Map(members.map((member) => [member.id, member.name]));
 
   async function removeExpense(expense: ExpenseRecord, source: ExpenseStorageMode) {
@@ -57,15 +64,18 @@ export function SettlementSummary({ groupId }: { groupId: string }) {
     return `/groups/${encodeURIComponent(groupId)}/expenses/${encodeURIComponent(expense.id)}/edit${offlineParam}`;
   };
 
-  return <div className="space-y-5">
-    <header className="rounded-3xl border border-[#ebe7de] bg-white p-5 sm:p-8">
-      <p className="text-xs font-bold tracking-[0.16em] text-[#99968d]">{saved.group.name.toUpperCase()}</p>
-      <h1 className="mt-2 text-3xl font-extrabold tracking-[-0.05em]">Settlement</h1>
-      <p className="mt-2 text-sm leading-6 text-[#77766d]">{store.signedIn ? "Showing expenses saved in your Supabase account." : "Guest mode: expenses are saved only in this browser and are not synced."}</p>
-      {(storageError || store.error) && <p role="alert" className="mt-3 rounded-xl bg-[#fff1ee] p-3 text-sm text-[#a64531]">{store.error ?? storageError}</p>}
-      {store.error && <button onClick={() => void store.refresh()} className="mt-3 text-sm font-bold text-[#d9674b]">Try loading again</button>}
-      {actionError && <p role="alert" className="mt-3 rounded-xl bg-[#fff1ee] p-3 text-sm text-[#a64531]">{actionError}</p>}
-    </header>
+  return <div className="settlement-page space-y-5">
+    <div className="settlement-screen-report space-y-5">
+      <header className="rounded-3xl border border-[#ebe7de] bg-white p-5 sm:p-8">
+        <div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
+          <div><p className="text-xs font-bold tracking-[0.16em] text-[#99968d]">{saved.group.name.toUpperCase()}</p><h1 className="mt-2 text-3xl font-extrabold tracking-[-0.05em]">Settlement</h1><p className="mt-2 text-sm leading-6 text-[#77766d]">{store.signedIn ? "Showing expenses saved in your Supabase account." : "Guest mode: expenses are saved only in this browser and are not synced."}</p></div>
+          <SettlementActions report={report} />
+        </div>
+        {!report && !expensesNeedingAssignment.length && <p className="mt-4 rounded-xl border border-border bg-surface-muted p-3 text-sm text-muted">{t("settlement.noReport")}</p>}
+        {(storageError || store.error) && <p role="alert" className="mt-3 rounded-xl bg-[#fff1ee] p-3 text-sm text-[#a64531]">{store.error ?? storageError}</p>}
+        {store.error && <button onClick={() => void store.refresh()} className="mt-3 text-sm font-bold text-[#d9674b]">Try loading again</button>}
+        {actionError && <p role="alert" className="mt-3 rounded-xl bg-[#fff1ee] p-3 text-sm text-[#a64531]">{actionError}</p>}
+      </header>
 
     {expensesNeedingAssignment.length > 0 && <section role="alert" className="rounded-3xl border border-[#e8b1a5] bg-[#fff3ef] p-5 sm:p-8"><h2 className="text-lg font-bold text-[#8f3928]">Some expenses need an item assignment</h2><p className="mt-1 text-sm leading-6 text-[#8f3928]">Settlement is paused until every item has at least one person assigned. Edit these expenses to choose who shared each item.</p><ul className="mt-4 space-y-3">{expensesNeedingAssignment.map((expense) => <li key={expense.id} className="flex flex-wrap items-center justify-between gap-3 rounded-xl bg-white/80 p-3 text-sm"><span><strong>{expense.description}</strong><span className="ml-2 text-[#77766d]">{getUnassignedItems(expense.items, memberIds).map((item) => item.name || "Unnamed item").join(", ")}</span></span><Link href={editUrl(expense, activeSource)} className="font-bold text-[#a64531] underline underline-offset-2">Edit expense</Link></li>)}</ul></section>}
 
@@ -77,7 +87,9 @@ export function SettlementSummary({ groupId }: { groupId: string }) {
 
     <section className="rounded-3xl border border-[#ebe7de] bg-white p-5 sm:p-8"><div className="flex items-center justify-between"><h2 className="text-xl font-bold">Expenses</h2><span className="text-xs text-[#88867d]">{store.expenses.length} {activeSource === "cloud" ? "saved to cloud" : "saved in this browser"}</span></div>{!store.expenses.length ? <p className="mt-3 text-sm text-[#77766d]">Your itemized expenses will show here.</p> : <div className="mt-4 space-y-3">{store.expenses.map((expense) => <ExpenseCard key={expense.id} expense={expense} names={names} members={members.map((member) => member.id)} editUrl={editUrl(expense, activeSource)} deleting={busyExpenseId === expense.id} onDelete={() => void removeExpense(expense, activeSource)} />)}</div>}</section>
 
-    <div className="flex flex-col-reverse gap-3 sm:flex-row sm:justify-between"><Link href={`/groups/${encodeURIComponent(groupId)}`} className="inline-flex min-h-12 items-center justify-center rounded-xl px-5 text-sm font-bold text-[#77766d]">Group details</Link><Link href={`/groups/${encodeURIComponent(groupId)}/expenses/new`} className="inline-flex min-h-12 items-center justify-center rounded-xl bg-[#ed795d] px-6 text-sm font-bold text-white">+ Add expense</Link></div>
+      <div className="flex flex-col-reverse gap-3 sm:flex-row sm:justify-between"><Link href={`/groups/${encodeURIComponent(groupId)}`} className="inline-flex min-h-12 items-center justify-center rounded-xl px-5 text-sm font-bold text-[#77766d]">Group details</Link><Link href={`/groups/${encodeURIComponent(groupId)}/expenses/new`} className="inline-flex min-h-12 items-center justify-center rounded-xl bg-[#ed795d] px-6 text-sm font-bold text-white">+ Add expense</Link></div>
+    </div>
+    <SettlementPrintReport report={report} />
   </div>;
 }
 

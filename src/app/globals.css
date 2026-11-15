@@ -191,6 +191,32 @@ button:not(:disabled), a, label[for] { -webkit-tap-highlight-color: transparent;
 
 .scan-page { background: var(--background); }
 
+.settlement-print-report { display: none; }
+
+.settlement-print-header,
+.settlement-print-summary,
+.settlement-print-row { display: flex; align-items: baseline; justify-content: space-between; gap: 1rem; }
+
+.settlement-print-header { border-bottom: 4px solid var(--primary); padding-bottom: 1rem; }
+.settlement-print-brand { margin: 0; color: var(--primary); font-size: 2rem; font-weight: 850; letter-spacing: -0.06em; }
+.settlement-print-subtitle,
+.settlement-print-meta,
+.settlement-print-expense > p,
+.settlement-print-report footer { color: var(--muted); font-size: 0.8rem; line-height: 1.5; }
+.settlement-print-meta { text-align: right; }
+.settlement-print-report h1 { margin: 1.5rem 0 1rem; color: var(--foreground); font-size: 2rem; letter-spacing: -0.04em; }
+.settlement-print-report h2 { margin: 2rem 0 0.75rem; color: var(--foreground); font-size: 1.1rem; }
+.settlement-print-summary { align-items: stretch; gap: 0.75rem; }
+.settlement-print-summary > div { flex: 1; border-radius: 0.75rem; background: var(--surface-muted); padding: 0.9rem; }
+.settlement-print-summary span { display: block; color: var(--muted); font-size: 0.72rem; font-weight: 700; text-transform: uppercase; }
+.settlement-print-summary strong { display: block; margin-top: 0.35rem; color: var(--foreground); font-size: 1.2rem; }
+.settlement-print-expense { border-bottom: 1px solid var(--border); padding: 0.75rem 0; }
+.settlement-print-expense-heading { font-size: 0.95rem; }
+.settlement-print-expense > p { margin: 0.25rem 0 0.7rem; }
+.settlement-print-charge { margin-top: 0.65rem; border-top: 1px dashed var(--border); padding-top: 0.45rem; color: var(--muted); font-size: 0.82rem; }
+.settlement-print-report section { break-inside: avoid; }
+.settlement-print-report footer { margin-top: 2rem; border-top: 1px solid var(--border); padding-top: 0.75rem; }
+
 .scan-card { animation: scan-card-in 600ms ease-out both; }
 
 .scan-fade-in { animation: scan-fade-in 700ms ease-out both; }
@@ -225,4 +251,18 @@ button:not(:disabled), a, label[for] { -webkit-tap-highlight-color: transparent;
   .scan-card,
   .scan-fade-in,
   .mascot-bob { animation: none; }
+}
+
+@media print {
+  @page { margin: 0.6in; size: auto; }
+  html, body { background: white !important; }
+  body { color: #1f2d42 !important; }
+  .settlement-screen-report,
+  .brand-shell-header,
+  aside,
+  body > nav,
+  .brand-page > nav { display: none !important; }
+  .settlement-page { display: block !important; max-width: none !important; }
+  .settlement-print-report { display: block !important; color: #1f2d42; }
+  .settlement-print-report * { color: inherit; }
 }
