@@ -33,19 +33,19 @@ export function buildPaymentReminder({
   const amount = formatCents(transfer.amountCents);
   if (language === "zh-TW") {
     const messages: Record<ReminderTone, string> = {
-      friendly: `嗨 ${toName}！有空時可以請你把 ${amount} 轉給 ${fromName} 嗎？這是「${groupName}」的分攤款，謝謝你！`,
-      polite: `${toName} 您好，方便時請您將「${groupName}」的分攤款 ${amount} 轉給 ${fromName}，謝謝。`,
-      direct: `${toName}，請將「${groupName}」的 ${amount} 轉給 ${fromName}，謝謝。`,
-      funny: `溫馨小提醒：${toName}，請把「${groupName}」的 ${amount} 轉給 ${fromName}。記帳小精靈正在友善地等待！`,
+      friendly: `嗨 ${fromName}！有空時可以請你把 ${amount} 轉給 ${toName} 嗎？這是「${groupName}」的分攤款，謝謝你！`,
+      polite: `${fromName} 您好，方便時請您將「${groupName}」的分攤款 ${amount} 轉給 ${toName}，謝謝。`,
+      direct: `${fromName}，請將「${groupName}」的 ${amount} 轉給 ${toName}，謝謝。`,
+      funny: `溫馨小提醒：${fromName}，請把「${groupName}」的 ${amount} 轉給 ${toName}。記帳小精靈正在友善地等待！`,
     };
     return messages[tone];
   }
 
   const messages: Record<ReminderTone, string> = {
-    friendly: `Hi ${toName}! When you get a chance, could you send ${fromName} ${amount} for ${groupName}? Thanks so much!`,
-    polite: `Hello ${toName}, would you please send ${fromName} ${amount} for ${groupName} when convenient? Thank you.`,
-    direct: `Hi ${toName}, please send ${fromName} ${amount} for ${groupName}. Thank you.`,
-    funny: `Tiny money nudge: ${toName}, please send ${fromName} ${amount} for ${groupName}—the spreadsheet gremlins are waiting (kindly).`,
+    friendly: `Hi ${fromName}! When you get a chance, could you send ${toName} ${amount} for ${groupName}? Thanks so much!`,
+    polite: `Hello ${fromName}, would you please send ${toName} ${amount} for ${groupName} when convenient? Thank you.`,
+    direct: `Hi ${fromName}, please send ${toName} ${amount} for ${groupName}. Thank you.`,
+    funny: `Tiny money nudge: ${fromName}, please send ${toName} ${amount} for ${groupName}—the spreadsheet gremlins are waiting (kindly).`,
   };
   return messages[tone];
 }

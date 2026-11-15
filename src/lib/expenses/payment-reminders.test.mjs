@@ -34,3 +34,13 @@ test("reminder content is based only on the selected transfer amount", () => {
   assert.match(message, /\$12\.50/);
   assert.doesNotMatch(message, /paid|completed|settled/i);
 });
+
+test("every tone asks the debtor to pay the creditor", () => {
+  for (const tone of ["friendly", "polite", "direct", "funny"]) {
+    for (const language of ["en", "zh-TW"]) {
+      const message = buildPaymentReminder({ ...details, tone, language });
+      assert.match(message, /Amy[\s\S]*\$12\.50[\s\S]*Bella|Amy[\s\S]*Bella[\s\S]*\$12\.50/);
+      assert.doesNotMatch(message, /Bella[\s\S]*\$12\.50[\s\S]*Amy/);
+    }
+  }
+});
