@@ -1,21 +1,16 @@
-import Link from "next/link";
-import { Suspense } from "react";
+import { AppShell } from "@/components/app-shell";
+import { LanguageSwitcher } from "@/components/i18n";
+import ScanIntro from "./scan-intro";
+import ScanWorkspace from "./scan-workspace";
 
-export default function ScanPage({ searchParams }: { searchParams: Promise<{ groupId?: string }> }) {
-  return <Suspense fallback={<main className="mx-auto flex min-h-screen max-w-xl flex-col px-5 py-8 sm:px-8"><p role="status" className="my-auto text-sm text-[#77766d]">Loading receipt scanner status…</p></main>}><ScanContent searchParams={searchParams} /></Suspense>;
-}
+export const instant = false;
 
-async function ScanContent({ searchParams }: { searchParams: Promise<{ groupId?: string }> }) {
+export default async function ScanPage({ searchParams }: { searchParams: Promise<{ groupId?: string }> }) {
   const { groupId } = await searchParams;
-  const manualExpenseHref = groupId ? `/groups/${encodeURIComponent(groupId)}/expenses/new` : "/groups";
-
-  return <main className="mx-auto flex min-h-screen max-w-xl flex-col px-5 py-8 sm:px-8">
-    <Link href={groupId ? `/groups/${encodeURIComponent(groupId)}` : "/"} className="text-sm font-semibold text-primary">← {groupId ? "Back to group" : "Back to overview"}</Link>
-    <section className="my-auto py-16" aria-labelledby="scanner-title">
-      <p className="text-xs font-bold tracking-[0.16em] text-[#99968d]">RECEIPT SCANNER</p>
-      <h1 id="scanner-title" className="mt-3 text-3xl font-bold tracking-tight">Receipt scanning isn’t available yet.</h1>
-      <p className="mt-4 leading-7 text-[#77766d]">The AI scanner is being integrated separately. No receipt has been uploaded or processed. You can enter the items yourself and review every share before saving.</p>
-      <Link href={manualExpenseHref} className="mt-6 inline-flex min-h-11 items-center justify-center rounded-xl bg-primary px-4 py-3 text-sm font-bold text-white hover:bg-primary-hover">{groupId ? "Enter items manually" : "Choose a group"}</Link>
+  return <AppShell title="Scan receipt" description="Review the receipt, then assign every item before saving." active="scan" action={<LanguageSwitcher />}>
+    <section className="scan-page rounded-2xl px-0 py-2 sm:px-1">
+      <ScanIntro />
+      <ScanWorkspace initialGroupId={groupId ?? ""} />
     </section>
-  </main>;
+  </AppShell>;
 }
