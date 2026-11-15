@@ -1,12 +1,12 @@
 "use client";
 
 import Link from "next/link";
-import { useRouter } from "next/navigation";
-import { useEffect, useState, type FormEvent } from "react";
-import { ArrowLeft, ArrowRight, CircleAlert, Plus, Trash2, UsersRound } from "lucide-react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
+import { ArrowLeft, ArrowRight, CheckCircle2, CircleAlert, Home, Plus, ReceiptText, Trash2, UsersRound } from "lucide-react";
 import type { Member } from "@/types";
 import type { SavedGroup } from "@/lib/groups/storage";
 import { useSavedGroups } from "@/components/groups/use-saved-groups";
+import { useLanguage } from "@/components/i18n";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -14,13 +14,15 @@ import { Input } from "@/components/ui/input";
 interface GroupFormProps { groupId?: string; }
 
 export function GroupForm({ groupId }: GroupFormProps) {
-  const router = useRouter();
+  const { t } = useLanguage();
   const { groups, loading, storageError, saveGroups } = useSavedGroups();
   const [name, setName] = useState("");
   const [members, setMembers] = useState<Member[]>([{ id: "draft-member-1", name: "" }]);
   const [formError, setFormError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [savedGroupId, setSavedGroupId] = useState<string | null>(null);
   const [ready, setReady] = useState(!groupId);
+  const successRef = useRef<HTMLElement | null>(null);
 
   const currentGroup = groupId ? groups.find((entry) => entry.group.id === groupId) : undefined;
 
@@ -34,13 +36,24 @@ export function GroupForm({ groupId }: GroupFormProps) {
     setReady(true);
   }, [currentGroup, groupId, loading]);
 
+  useEffect(() => {
+    if (!savedGroupId) return;
+    const frame = window.requestAnimationFrame(() => {
+      successRef.current?.scrollIntoView({ block: "center" });
+      successRef.current?.focus({ preventScroll: true });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [savedGroupId]);
+
   function addMember() { setMembers((current) => [...current, { id: crypto.randomUUID(), name: "" }]); }
   function renameMember(memberId: string, nextName: string) { setMembers((current) => current.map((member) => member.id === memberId ? { ...member, name: nextName } : member)); }
   function removeMember(memberId: string) { setMembers((current) => current.filter((member) => member.id !== memberId)); }
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (saving) return;
     setFormError(null);
+    setSavedGroupId(null);
     const trimmedName = name.trim();
     const activeMembers = members.filter((member) => member.name.trim()).map((member) => ({
       ...member,
@@ -61,14 +74,29 @@ export function GroupForm({ groupId }: GroupFormProps) {
 
     setSaving(true);
     try {
-      if (!await saveGroups(nextGroups)) { setFormError("We couldn’t save the group. Your changes are still here; please try again."); return; }
-      router.push(`/groups/${encodeURIComponent(groupIdToSave)}`);
+      if (!await saveGroups(nextGroups)) { setFormError(t("groups.saveError")); return; }
+      setSavedGroupId(groupIdToSave);
     } finally { setSaving(false); }
   }
 
   if (loading || (groupId && !ready)) return <div role="status" className="animate-pulse rounded-2xl border border-border bg-white p-6"><span className="block h-4 w-28 rounded bg-surface-muted"/><span className="mt-3 block h-8 w-3/4 rounded bg-surface-muted"/><span className="mt-6 block h-11 rounded-xl bg-surface-muted"/></div>;
 
   if (groupId && ready && !currentGroup) return <Card className="p-6"><h2 className="text-lg font-semibold">Group not found</h2><p className="mt-2 text-sm text-muted">It may have been removed or isn’t available in this browser.</p><Link href="/groups" className="mt-4 inline-flex items-center gap-2 text-sm font-semibold text-primary"><ArrowLeft size={15} aria-hidden="true"/>Back to groups</Link></Card>;
+
+  if (savedGroupId) return <section ref={successRef} tabIndex={-1} role="status" aria-live="polite" aria-labelledby="group-save-success-title" aria-describedby="group-save-success-description" className="brand-card p-6 outline-none focus-visible:ring-4 focus-visible:ring-ring/15 sm:p-8">
+    <div className="flex items-start gap-4">
+      <span className="grid h-12 w-12 shrink-0 place-items-center rounded-2xl bg-success-soft text-[#4d7a54]" aria-hidden="true"><CheckCircle2 size={25} /></span>
+      <div>
+        <p className="brand-kicker text-[#4d7a54]">{t("groups.savedLabel")}</p>
+        <h2 id="group-save-success-title" className="mt-1 text-2xl font-extrabold tracking-[-0.04em]">{t("groups.saveSuccess")}</h2>
+        <p id="group-save-success-description" className="mt-2 max-w-xl text-sm leading-6 text-muted">{t("groups.saveSuccessDescription")}</p>
+      </div>
+    </div>
+    <div className="mt-7 flex flex-col gap-2.5 sm:flex-row">
+      <Link href={`/scan?groupId=${encodeURIComponent(savedGroupId)}`} className="brand-button brand-button-coral min-h-12 w-full text-sm sm:w-auto"><ReceiptText size={16} aria-hidden="true" />{t("groups.nextScan")}<ArrowRight size={16} aria-hidden="true" /></Link>
+      <Link href="/" className="brand-button brand-button-cream min-h-12 w-full text-sm sm:w-auto"><Home size={16} aria-hidden="true" />{t("groups.backOverview")}</Link>
+    </div>
+  </section>;
 
   return <form id="create-group" onSubmit={handleSubmit} className="brand-card p-5 sm:p-7">
     <div className="flex items-start gap-3 border-b border-[#edf1ed] pb-5">

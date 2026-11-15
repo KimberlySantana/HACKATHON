@@ -115,11 +115,19 @@ export default function ScanWorkspace() {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const scanRequestId = useRef(0);
+  const groupHandoffApplied = useRef(false);
 
   const receiptSlots: Array<{ role: ReceiptRole; label: string; description: string }> = [
     { role: "itemized", label: t("scan.itemizedReceipt"), description: t("scan.itemizedDescription") },
     { role: "payment", label: t("scan.paymentReceipt"), description: t("scan.paymentDescription") },
   ];
+
+  useEffect(() => {
+    if (groupHandoffApplied.current || groupsLoading) return;
+    groupHandoffApplied.current = true;
+    const handoffGroupId = new URLSearchParams(window.location.search).get("groupId");
+    if (handoffGroupId && groups.some(({ group }) => group.id === handoffGroupId)) setSelectedGroupId(handoffGroupId);
+  }, [groups, groupsLoading]);
 
   useEffect(() => {
     return () => {
