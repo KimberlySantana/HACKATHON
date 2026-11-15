@@ -39,7 +39,7 @@ async function GroupDetail({ params, searchParams }: { params: Promise<{ groupId
           <Link href={groupExpenseHref(groupId)} className="inline-flex min-h-11 items-center justify-center rounded-xl bg-primary px-4 text-sm font-semibold text-white hover:bg-primary-hover">Add manually</Link>
         </div>
       </div>
-      <p className="mt-3 rounded-xl bg-[#f7f6f1] px-3.5 py-2.5 text-xs leading-5 text-muted">Receipt scanning isn’t available yet. Add this expense manually; no receipt upload or AI extraction will occur.</p>
+      <p className="mt-3 rounded-xl bg-[#f7f6f1] px-3.5 py-2.5 text-xs leading-5 text-muted">Enter items, choose who paid, and assign each item before saving. AI receipt scanning is coming later.</p>
     </section>
     <GroupMembersPanel groupId={groupId} />
     <div className="flex justify-end"><Link href={`/groups/${encodedId}/settlement`} className="inline-flex min-h-11 items-center justify-center rounded-xl border border-border bg-white px-4 text-sm font-semibold text-foreground hover:bg-surface-muted">View settlement</Link></div>

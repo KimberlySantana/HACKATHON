@@ -11,6 +11,7 @@ import { assignEveryone, getUnassignedItems, toggleAssignedMember } from "@/lib/
 import { hasExplicitPayer } from "@/lib/expenses/validation";
 import { expenseReturnHref, removeDraftItem } from "@/lib/expenses/draft";
 import { canLeaveWithUnsavedChanges } from "@/lib/forms/navigation";
+import { isReceiptExpenseDraft, receiptDraftStorageKey } from "@/lib/receipt/draft";
 import type { ExpenseRecord } from "@/lib/expenses/types";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -23,7 +24,7 @@ const blankItem = (): DraftItem => ({ id: "new-item-1", name: "", note: "", note
 const moneyValue = (value: string) => value.trim() === "" ? 0 : parseMoneyToCents(value);
 const centsInput = (amount: number) => `${Math.floor(amount / 100)}.${String(amount % 100).padStart(2, "0")}`;
 
-export function ExpenseForm({ groupId, expenseId, offline = false }: { groupId: string; expenseId?: string; offline?: boolean }) {
+export function ExpenseForm({ groupId, expenseId, offline = false, fromScan = false }: { groupId: string; expenseId?: string; offline?: boolean; fromScan?: boolean }) {
   const router = useRouter();
   const formRef = useRef<HTMLFormElement>(null);
   const { groups, loading, storageError } = useSavedGroups();
@@ -37,10 +38,12 @@ export function ExpenseForm({ groupId, expenseId, offline = false }: { groupId: 
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [pendingOfflineExpense, setPendingOfflineExpense] = useState<ExpenseRecord | null>(null);
-  const [editReady, setEditReady] = useState(!expenseId);
+  const [editReady, setEditReady] = useState(!expenseId && !fromScan);
   const [editMissing, setEditMissing] = useState(false);
   const [dirty, setDirty] = useState(false);
   const [invalidField, setInvalidField] = useState<string | null>(null);
+  const [scannedReceiptCreatedAt, setScannedReceiptCreatedAt] = useState<string | null>(null);
+  const [receiptDraftError, setReceiptDraftError] = useState<string | null>(null);
 
   const editRecord = expenseId
     ? offline || !expenseStore.signedIn
@@ -68,6 +71,40 @@ export function ExpenseForm({ groupId, expenseId, offline = false }: { groupId: 
     setDirty(false);
     setEditReady(true);
   }, [editRecord, expenseId, expenseStore.loading, loading]);
+
+  useEffect(() => {
+    if (!fromScan || expenseId || loading || expenseStore.loading) return;
+    const draftKey = receiptDraftStorageKey(groupId);
+    try {
+      const serialized = window.sessionStorage.getItem(draftKey);
+      const scanned = serialized ? JSON.parse(serialized) as unknown : null;
+      if (!scanned || !isReceiptExpenseDraft(scanned, groupId)) {
+        setReceiptDraftError("The reviewed receipt draft is missing or invalid. Return to Scan Receipt and review it again, or enter this expense manually.");
+        setEditReady(true);
+        return;
+      }
+      setDescription(scanned.description);
+      setPaidByMemberId("");
+      setTax(centsInput(scanned.taxCents));
+      setTip(centsInput(scanned.tipCents));
+      setItems(scanned.items.map((item) => ({
+        id: item.id,
+        name: item.name,
+        note: "",
+        noteOpen: false,
+        quantity: String(item.quantity),
+        unitPrice: centsInput(item.unitPriceCents),
+        assignedMemberIds: [],
+      })));
+      setScannedReceiptCreatedAt(scanned.createdAt);
+      setReceiptDraftError(null);
+      setDirty(false);
+      setEditReady(true);
+    } catch {
+      setReceiptDraftError("The reviewed receipt draft could not be loaded. Return to Scan Receipt and review it again, or enter this expense manually.");
+      setEditReady(true);
+    }
+  }, [expenseId, expenseStore.loading, fromScan, groupId, loading]);
 
   const parsedItems = useMemo(() => items.map((item) => ({
     draft: item,
@@ -118,6 +155,7 @@ export function ExpenseForm({ groupId, expenseId, offline = false }: { groupId: 
 
   function leaveEditor() {
     if (!canLeaveWithUnsavedChanges(dirty, () => window.confirm("Discard your unsaved expense changes?"))) return;
+    if (fromScan) window.sessionStorage.removeItem(receiptDraftStorageKey(groupId));
     router.push(expenseReturnHref(groupId, Boolean(expenseId)));
   }
 
@@ -145,6 +183,7 @@ export function ExpenseForm({ groupId, expenseId, offline = false }: { groupId: 
     setError(null);
     try {
       await expenseStore.save(expense, target);
+      if (fromScan) window.sessionStorage.removeItem(receiptDraftStorageKey(groupId));
       router.push(`/groups/${encodeURIComponent(groupId)}/settlement`);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Expense could not be saved.");
@@ -183,7 +222,7 @@ export function ExpenseForm({ groupId, expenseId, offline = false }: { groupId: 
     const expense: ExpenseRecord = {
       id: expenseId ?? crypto.randomUUID(), groupId, description: description.trim(), paidByMemberId,
       items: normalized.map(({ draft, price, quantity }) => ({ id: draft.id.startsWith("new-item") ? crypto.randomUUID() : draft.id, name: draft.name.trim(), note: draft.note.trim() || undefined, quantity, unitPriceCents: price!, assignedMemberIds: draft.assignedMemberIds, memberSharesCents: draft.memberSharesCents })),
-      taxCents, tipCents, createdAt: editRecord?.createdAt ?? new Date().toISOString(),
+      taxCents, tipCents, createdAt: editRecord?.createdAt ?? scannedReceiptCreatedAt ?? new Date().toISOString(),
     };
     const target: ExpenseStorageMode = expenseStore.signedIn ? (offline ? "offline" : "cloud") : "guest";
     await persist(expense, target);
@@ -199,7 +238,10 @@ export function ExpenseForm({ groupId, expenseId, offline = false }: { groupId: 
       <Card className="p-5 sm:p-6">
         <div className="flex flex-wrap items-start justify-between gap-3 border-b border-[#edf1ed] pb-5">
           <div><Badge tone="green">{saved.group.name}</Badge><h2 className="mt-2 text-xl font-semibold tracking-[-0.035em]">{expenseId ? "Review expense" : "Add an expense"}</h2><p className="mt-1 max-w-xl text-sm leading-5 text-muted">Enter the receipt details. You’ll review each person’s share before you save.</p></div>
+          {fromScan && !receiptDraftError && <Badge tone="green">Receipt reviewed</Badge>}
         </div>
+
+        {receiptDraftError && <p role="alert" className="mt-4 rounded-xl border border-[#f0d3cd] bg-danger-soft px-3.5 py-3 text-sm leading-5 text-danger">{receiptDraftError}</p>}
 
         {!expenseStore.signedIn && <p role="status" className="mt-4 rounded-xl border border-[#eadbb7] bg-warning-soft px-3.5 py-3 text-sm leading-5 text-[#75511e]">Guest mode · this expense stays in this browser and won’t sync to another device.</p>}
         {expenseStore.signedIn && offline && <p role="status" className="mt-4 rounded-xl border border-[#eadbb7] bg-warning-soft px-3.5 py-3 text-sm leading-5 text-[#75511e]">Offline copy · changes stay in this browser until you choose to import them.</p>}

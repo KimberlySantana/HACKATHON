@@ -7,13 +7,16 @@
     "build": "next build",
     "start": "next start",
     "typecheck": "tsc --noEmit",
-    "test": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types --test src/lib/groups/storage.test.mjs src/lib/groups/member-references.test.mjs src/lib/groups/form.test.mjs src/lib/expenses/calculations.test.mjs src/lib/expenses/cloud.test.mjs src/lib/expenses/storage.test.mjs src/lib/expenses/assignments.test.mjs src/lib/expenses/draft.test.mjs src/lib/expenses/settlement-sharing.test.mjs src/lib/expenses/validation.test.mjs src/lib/forms/navigation.test.mjs"
+    "test": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types --test src/lib/groups/storage.test.mjs src/lib/groups/member-references.test.mjs src/lib/groups/form.test.mjs src/lib/expenses/calculations.test.mjs src/lib/expenses/cloud.test.mjs src/lib/expenses/storage.test.mjs src/lib/expenses/assignments.test.mjs src/lib/expenses/draft.test.mjs src/lib/expenses/settlement-sharing.test.mjs src/lib/expenses/payment-reminders.test.mjs src/lib/expenses/pdf-report.test.mjs src/lib/expenses/validation.test.mjs src/lib/forms/navigation.test.mjs src/lib/receipt/upload-validation.test.mjs src/lib/receipt/draft.test.mjs src/lib/receipt/extraction.test.mjs src/lib/receipt/quota-migration.test.mjs src/lib/receipt/scanner-security.test.mjs"
   },
   "dependencies": {
+    "@pdf-lib/fontkit": "1.1.1",
     "@supabase/ssr": "^0.12.7",
     "@supabase/supabase-js": "^2.119.0",
     "lucide-react": "^1.73.0",
     "next": "16.4.6",
+    "openai": "7.56.0",
+    "pdf-lib": "1.17.1",
     "react": "19.3.0",
     "react-dom": "19.3.0"
   },
