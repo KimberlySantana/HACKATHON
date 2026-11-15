@@ -4,10 +4,12 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { AlertCircle, ArrowRight, Check, CircleDollarSign, Plus, ScanLine, Trash2 } from "lucide-react";
+import { useLanguage } from "@/components/i18n";
 import { useSavedGroups } from "@/components/groups/use-saved-groups";
 import { useGroupExpenses, type ExpenseStorageMode } from "@/components/expenses/use-group-expenses";
 import { calculateExpenseShares, formatCents, getExpenseSubtotalCents, parseMoneyToCents } from "@/lib/expenses/calculations";
 import { getUnassignedItems } from "@/lib/expenses/assignments";
+import { clearReceiptTransfer, readReceiptTransfer, receiptItemId, type PendingReceiptTransfer } from "@/lib/expenses/receipt-transfer";
 import type { ExpenseRecord } from "@/lib/expenses/types";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -19,9 +21,10 @@ const blankItem = (): DraftItem => ({ id: "new-item-1", name: "", quantity: "1",
 const moneyValue = (value: string) => value.trim() === "" ? 0 : parseMoneyToCents(value);
 const centsInput = (amount: number) => `${Math.floor(amount / 100)}.${String(amount % 100).padStart(2, "0")}`;
 
-export function ExpenseForm({ groupId, expenseId, offline = false }: { groupId: string; expenseId?: string; offline?: boolean }) {
+export function ExpenseForm({ groupId, expenseId, receiptId, offline = false }: { groupId: string; expenseId?: string; receiptId?: string; offline?: boolean }) {
   const router = useRouter();
   const formRef = useRef<HTMLFormElement>(null);
+  const { t } = useLanguage();
   const { groups, loading, storageError } = useSavedGroups();
   const saved = groups.find((entry) => entry.group.id === groupId);
   const expenseStore = useGroupExpenses(groupId, saved?.members ?? []);
@@ -35,6 +38,7 @@ export function ExpenseForm({ groupId, expenseId, offline = false }: { groupId: 
   const [pendingOfflineExpense, setPendingOfflineExpense] = useState<ExpenseRecord | null>(null);
   const [editReady, setEditReady] = useState(!expenseId);
   const [editMissing, setEditMissing] = useState(false);
+  const [receiptTransfer, setReceiptTransfer] = useState<PendingReceiptTransfer | null>(null);
 
   const editRecord = expenseId
     ? offline || !expenseStore.signedIn
@@ -61,6 +65,23 @@ export function ExpenseForm({ groupId, expenseId, offline = false }: { groupId: 
   }, [editRecord, expenseId, expenseStore.loading, loading]);
 
   useEffect(() => {
+    if (expenseId || !receiptId || loading || expenseStore.loading || !saved) return;
+    const pending = readReceiptTransfer(groupId, receiptId);
+    if (!pending) return;
+    setReceiptTransfer(pending);
+    setDescription(pending.receipt.merchant);
+    setTax(centsInput(Math.round(pending.receipt.tax * 100)));
+    setTip(centsInput(Math.round(pending.receipt.tip * 100)));
+    setItems(pending.receipt.items.map((item) => ({
+      id: receiptItemId(groupId, pending.receipt.id, item.id),
+      name: item.name,
+      quantity: String(item.quantity),
+      unitPrice: centsInput(Math.round(item.unitPrice * 100)),
+      assignedMemberIds: [],
+    })));
+  }, [expenseId, expenseStore.loading, groupId, loading, receiptId, saved]);
+
+  useEffect(() => {
     if (!paidByMemberId && saved?.members[0]) setPaidByMemberId(saved.members[0].id);
   }, [paidByMemberId, saved]);
 
@@ -72,6 +93,7 @@ export function ExpenseForm({ groupId, expenseId, offline = false }: { groupId: 
   const subtotalCents = parsedItems.reduce((sum, item) => sum + (item.price ?? 0) * (Number.isInteger(item.quantity) ? item.quantity : 0), 0);
   const taxCents = moneyValue(tax);
   const tipCents = moneyValue(tip);
+  const receiptTotalCents = receiptTransfer ? Math.round(receiptTransfer.receipt.total * 100) : null;
   const memberIds = saved?.members.map((member) => member.id) ?? [];
   const unassignedItems = getUnassignedItems(items, memberIds);
   const unassignedItemIds = new Set(unassignedItems.map((item) => item.id));
@@ -114,6 +136,7 @@ export function ExpenseForm({ groupId, expenseId, offline = false }: { groupId: 
     setError(null);
     try {
       await expenseStore.save(expense, target);
+      if (receiptTransfer) clearReceiptTransfer(receiptTransfer.transferId);
       router.push(`/groups/${encodeURIComponent(groupId)}/settlement`);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Expense could not be saved.");
@@ -135,12 +158,13 @@ export function ExpenseForm({ groupId, expenseId, offline = false }: { groupId: 
       return;
     }
     if (taxCents === null || tipCents === null) return setError("Enter tax and tip as dollar amounts with up to two decimal places.");
+    if (receiptTotalCents !== null && subtotalCents + taxCents + tipCents !== receiptTotalCents) return setError(t("expense.receiptTotalMismatch"));
     if (taxCents + tipCents > 0 && subtotalCents === 0) return setError("Add an item with a price before adding tax or tip.");
     if (!Number.isSafeInteger(subtotalCents + taxCents + tipCents)) return setError("This expense total is too large to calculate safely.");
     if (normalized.some(({ price, quantity }) => !Number.isSafeInteger(price! * quantity))) return setError("An item total is too large to calculate safely.");
 
     const expense: ExpenseRecord = {
-      id: expenseId ?? crypto.randomUUID(), groupId, description: description.trim(), paidByMemberId,
+      id: expenseId ?? receiptTransfer?.expenseId ?? crypto.randomUUID(), groupId, description: description.trim(), paidByMemberId,
       items: normalized.map(({ draft, price, quantity }) => ({ id: draft.id.startsWith("new-item") ? crypto.randomUUID() : draft.id, name: draft.name.trim(), quantity, unitPriceCents: price!, assignedMemberIds: draft.assignedMemberIds, memberSharesCents: draft.memberSharesCents })),
       taxCents, tipCents, createdAt: editRecord?.createdAt ?? new Date().toISOString(),
     };
@@ -162,6 +186,7 @@ export function ExpenseForm({ groupId, expenseId, offline = false }: { groupId: 
 
         {!expenseStore.signedIn && <p role="status" className="mt-4 rounded-xl border border-[#eadbb7] bg-warning-soft px-3.5 py-3 text-sm leading-5 text-[#75511e]">Guest mode · this expense stays in this browser and won’t sync to another device.</p>}
         {expenseStore.signedIn && offline && <p role="status" className="mt-4 rounded-xl border border-[#eadbb7] bg-warning-soft px-3.5 py-3 text-sm leading-5 text-[#75511e]">Offline copy · changes stay in this browser until you choose to import them.</p>}
+        {receiptTransfer && <p role="status" className="mt-4 rounded-xl border border-[#f2d4c8] bg-[#fff8f4] px-3.5 py-3 text-sm leading-5 text-[#875143]">{t("expense.receiptImported")}</p>}
         {(storageError || expenseStore.error) && <p role="alert" className="mt-4 flex items-start gap-2 rounded-xl border border-[#f0d3cd] bg-danger-soft px-3.5 py-3 text-sm leading-5 text-danger"><AlertCircle size={16} className="mt-0.5 shrink-0" aria-hidden="true" />{expenseStore.error ?? storageError}</p>}
 
         <div className="mt-5 grid gap-4 sm:grid-cols-2">

@@ -3,8 +3,13 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ChangeEvent, DragEvent } from "react";
 import Image from "next/image";
+import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useLanguage } from "@/components/i18n";
+import { useSavedGroups } from "@/components/groups/use-saved-groups";
 import type { ReceiptReview, ReceiptScanResult } from "@/lib/receipt/extraction";
+import { createReceiptTransfer, saveReceiptTransfer } from "@/lib/expenses/receipt-transfer";
+import { validateReceiptForTransfer } from "@/lib/splitting/receipt";
 import type { TranslationKey } from "@/lib/i18n/translations";
 import type { Receipt, ReceiptItem } from "@/types";
 
@@ -82,6 +87,8 @@ function localizeReviewNote(note: string, t: Translator) {
 
 export default function ScanWorkspace() {
   const { t } = useLanguage();
+  const router = useRouter();
+  const { groups, loading: groupsLoading } = useSavedGroups();
   const [selectedFiles, setSelectedFiles] = useState<SelectedFiles>({ itemized: null, payment: null });
   const [receipt, setReceipt] = useState<Receipt | null>(null);
   const [review, setReview] = useState<ReceiptReview | null>(null);
@@ -89,6 +96,9 @@ export default function ScanWorkspace() {
   const [isLoading, setIsLoading] = useState(false);
   const [isScanning, setIsScanning] = useState(false);
   const [tipManuallyEdited, setTipManuallyEdited] = useState(false);
+  const [reviewAcknowledged, setReviewAcknowledged] = useState(false);
+  const [selectedGroupId, setSelectedGroupId] = useState("");
+  const [isSendingToGroup, setIsSendingToGroup] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const scanRequestId = useRef(0);
@@ -133,6 +143,7 @@ export default function ScanWorkspace() {
     setReceipt(null);
     setReview(null);
     setTipManuallyEdited(false);
+    setReviewAcknowledged(false);
     setError(null);
     setNotice(t("scan.readingReceipts", { receipts: uploads.length === 2 ? t("scan.bothReceipts") : t("scan.yourReceipt") }));
 
@@ -149,6 +160,7 @@ export default function ScanWorkspace() {
 
       setReceipt(payload.receipt);
       setReview(payload.review);
+      setReviewAcknowledged(false);
       setNotice(payload.review.needsConfirmation
         ? t("scan.noticeConfirm")
         : payload.review.needsReview
@@ -184,6 +196,7 @@ export default function ScanWorkspace() {
     setReceipt(null);
     setReview(null);
     setError(null);
+      setReviewAcknowledged(false);
     void scanReceipts(nextFiles);
   }
 
@@ -206,6 +219,7 @@ export default function ScanWorkspace() {
     setReceipt(null);
     setReview(null);
     setError(null);
+      setReviewAcknowledged(false);
     if (nextFiles.itemized || nextFiles.payment) {
       void scanReceipts(nextFiles);
     } else {
@@ -226,6 +240,7 @@ export default function ScanWorkspace() {
       setReceipt(sample);
       setReview(null);
       setTipManuallyEdited(false);
+      setReviewAcknowledged(false);
       setNotice(t("scan.noticeDemoLoaded"));
     } catch {
       setError(t("error.demoLoadTryAgain"));
@@ -376,7 +391,7 @@ export default function ScanWorkspace() {
 
             <div className="grid gap-3 sm:grid-cols-2">
               <label className="flex items-center justify-between rounded-2xl border border-[#eeeae2] bg-[#f7f6f1] px-4 py-3 text-sm text-[#77766d] transition focus-within:border-[#ed795d] focus-within:bg-white"><span>{t("scan.tax")}</span><span className="flex items-center gap-1 font-bold text-[#25251f]"><span>$</span><input type="number" min="0" step="0.01" value={receipt.tax} aria-invalid={fieldNeedsReview("tax")} onChange={(event) => updateReceipt({ tax: Math.max(0, Number(event.target.value) || 0) })} className={`w-16 rounded px-1 text-right outline-none ${fieldNeedsReview("tax") ? "bg-[#fffaf0]" : "bg-transparent"}`} /></span></label>
-              <label className="flex items-center justify-between rounded-2xl border border-[#eeeae2] bg-[#f7f6f1] px-4 py-3 text-sm text-[#77766d] transition focus-within:border-[#ed795d] focus-within:bg-white"><span>{t("scan.tip")}</span><span className="flex items-center gap-1 font-bold text-[#25251f]"><span>$</span><input type="number" min="0" step="0.01" placeholder={t("scan.enter")} value={tipNeedsManualEntry ? "" : receipt.tip} aria-invalid={fieldNeedsReview("tip")} onChange={(event) => { setTipManuallyEdited(true); updateReceipt({ tip: event.target.value === "" ? 0 : Math.max(0, Number(event.target.value) || 0) }); }} className={`w-20 rounded px-1 text-right outline-none placeholder:text-[#aaa69c] ${fieldNeedsReview("tip") ? "bg-[#fffaf0]" : "bg-transparent"}`} /></span></label>
+              <label className="flex items-center justify-between rounded-2xl border border-[#eeeae2] bg-[#f7f6f1] px-4 py-3 text-sm text-[#77766d] transition focus-within:border-[#ed795d] focus-within:bg-white"><span>{t("scan.tip")}</span><span className="flex items-center gap-1 font-bold text-[#25251f]"><span>$</span><input type="number" min="0" step="0.01" placeholder={t("scan.enter")} value={tipNeedsManualEntry ? "" : receipt.tip} aria-invalid={fieldNeedsReview("tip")} onChange={(event) => { setTipManuallyEdited(event.target.value.trim() !== ""); updateReceipt({ tip: event.target.value === "" ? 0 : Math.max(0, Number(event.target.value) || 0) }); }} className={`w-20 rounded px-1 text-right outline-none placeholder:text-[#aaa69c] ${fieldNeedsReview("tip") ? "bg-[#fffaf0]" : "bg-transparent"}`} /></span></label>
             </div>
 
             <div className={`rounded-[1.65rem] p-5 text-white shadow-[0_16px_34px_rgba(37,37,31,0.16)] ${fieldNeedsReview("total") ? "border-2 border-[#e6c66f] bg-[#302d24]" : "bg-[#25251f]"}`}>
@@ -387,7 +402,45 @@ export default function ScanWorkspace() {
               {Math.abs(receipt.total - calculatedTotal) > 0.05 && <p className="mt-3 text-xs leading-5 text-[#f4d578]">{t("scan.calculatedFromFields", { amount: money.format(calculatedTotal) })}</p>}
             </div>
 
-            <button type="button" className="group min-h-14 w-full rounded-2xl bg-[#ed795d] px-6 text-base font-extrabold text-white shadow-[0_10px_24px_rgba(237,121,93,0.2)] transition duration-200 hover:-translate-y-0.5 hover:bg-[#e86b4e] hover:shadow-[0_14px_28px_rgba(237,121,93,0.28)] focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-[#ed795d]">{t("scan.continueToSplit")} <span aria-hidden="true" className="ml-1 inline-block transition group-hover:translate-x-1">→</span></button>
+            {(review?.needsReview || review?.needsConfirmation) && <label className="flex cursor-pointer items-start gap-3 rounded-2xl border border-[#e6c66f] bg-[#fffaf0] px-4 py-3 text-sm leading-6 text-[#77684d]">
+              <input type="checkbox" checked={reviewAcknowledged} onChange={(event) => setReviewAcknowledged(event.target.checked)} className="mt-1 h-4 w-4 accent-[#ed795d]" />
+              <span>{t("scan.reviewAcknowledgement")}</span>
+            </label>}
+
+            <div className="rounded-[1.65rem] border border-[#f2d4c8] bg-[#fffaf7] p-4 sm:p-5">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <h3 className="text-sm font-extrabold">{t("scan.chooseGroup")}</h3>
+                  <p className="mt-1 text-xs leading-5 text-[#929087]">{t("scan.chooseGroupDescription")}</p>
+                </div>
+                <span className="rounded-full bg-white px-3 py-1 text-[10px] font-extrabold uppercase tracking-[0.12em] text-[#ed795d]">{t("scan.reviewBeforeTransfer")}</span>
+              </div>
+              {groups.length > 0 ? <select value={selectedGroupId} onChange={(event) => setSelectedGroupId(event.target.value)} disabled={groupsLoading || isSendingToGroup} className="mt-4 min-h-12 w-full rounded-2xl border border-[#e7e3da] bg-white px-4 text-sm font-bold text-[#25251f] outline-none transition focus:border-[#ed795d] focus:ring-4 focus:ring-[#ed795d]/10 disabled:opacity-60">
+                <option value="">{t("scan.chooseGroup")}</option>
+                {groups.map(({ group }) => <option key={group.id} value={group.id}>{group.name}</option>)}
+              </select> : <div className="mt-4 rounded-2xl border border-dashed border-[#e7e3da] bg-white px-4 py-3 text-sm leading-6 text-[#77766d]">{t("scan.noGroupsForTransfer")} <Link href="/groups" className="font-extrabold text-[#ed795d] hover:underline">{t("scan.createGroupFirst")}</Link></div>}
+            </div>
+
+            <button type="button" disabled={isSendingToGroup || isScanning || !selectedGroupId} onClick={() => {
+              if (!receipt) return;
+              setError(null);
+              const receiptReview: ReceiptReview = review ?? { needsReview: false, needsConfirmation: false, confidence: "high", fields: [], notes: [] };
+              const tipConfirmed = tipManuallyEdited || !fieldNeedsReview("tip");
+              const validation = validateReceiptForTransfer(receipt, receiptReview, tipConfirmed, reviewAcknowledged);
+              if (!validation.valid) {
+                const key = validation.flags.includes("tip") ? "scan.transferTipError" : validation.flags.includes("review") ? "scan.transferReviewError" : validation.flags.includes("subtotal") || validation.flags.includes("total") ? "scan.transferTotalsError" : "scan.transferDataError";
+                setError(t(key));
+                return;
+              }
+              setIsSendingToGroup(true);
+              try {
+                saveReceiptTransfer(createReceiptTransfer(selectedGroupId, receipt, receiptReview, tipConfirmed, reviewAcknowledged));
+                router.push(`/groups/${encodeURIComponent(selectedGroupId)}/expenses/new?fromReceipt=${encodeURIComponent(receipt.id)}`);
+              } catch {
+                setIsSendingToGroup(false);
+                setError(t("scan.transferDataError"));
+              }
+            }} className="group min-h-14 w-full rounded-2xl bg-[#ed795d] px-6 text-base font-extrabold text-white shadow-[0_10px_24px_rgba(237,121,93,0.2)] transition duration-200 hover:-translate-y-0.5 hover:bg-[#e86b4e] hover:shadow-[0_14px_28px_rgba(237,121,93,0.28)] focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-[#ed795d] disabled:cursor-not-allowed disabled:opacity-50">{isSendingToGroup ? t("scan.sendingToGroup") : t("scan.continueToSplit")} <span aria-hidden="true" className="ml-1 inline-block transition group-hover:translate-x-1">→</span></button>
             <p className="text-center text-xs leading-5 text-[#a19e93]">{t("scan.nextAssignItems")}</p>
           </div>
         )}
