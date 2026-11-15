@@ -16,6 +16,7 @@ import { formatMajorUnits } from "@/lib/currency/money";
 import { CURRENCY_CODES, CURRENCY_DECIMALS, CURRENCY_LABELS, type CurrencyCode } from "@/lib/currency/types";
 import { CurrencyAmount } from "@/components/currency";
 import { majorToMinorUnits } from "@/lib/currency/money";
+import { calculatePercentageMinorUnits, parsePercentageToPpm } from "@/lib/finance/percentages";
 
 type ReceiptRole = "itemized" | "payment";
 
@@ -58,6 +59,10 @@ function localizeReviewNote(note: string, t: Translator) {
   if (note.startsWith("No itemized receipt was detected")) return t("review.noItemized");
   if (note.startsWith("Itemized subtotal is missing")) return t("review.itemMissing");
   if (note.startsWith("Itemized tax is missing")) return t("review.taxMissing");
+  if (note.startsWith("Tax was calculated")) return t("review.taxCalculated");
+  if (note.startsWith("Tax is included")) return t("review.taxIncluded");
+  if (note.startsWith("The receipt indicates that tax was not charged")) return t("review.taxNotCharged");
+  if (note.startsWith("A tax percentage was found")) return t("review.taxBasisMissing");
   if (note.startsWith("The itemized receipt has lower-confidence")) return t("review.itemizedLowConfidence");
   if (note.startsWith("No clearly itemized receipt")) return t("review.receiptMissing");
   if (note.startsWith("The payment receipt has a blank tip")) return t("review.tipBlank");
@@ -66,6 +71,7 @@ function localizeReviewNote(note: string, t: Translator) {
   if (note.startsWith("No confirmed actual tip")) return t("review.tipMissing");
   if (note.startsWith("No actual tip amount")) return t("review.tipNotPresent");
   if (note.startsWith("The two receipts show different tip")) return t("review.tipConflict");
+  if (note.startsWith("Tip was calculated")) return t("review.tipPercentageCalculated");
   if (note.startsWith("Final charged total is missing or unreadable on the payment")) return t("review.totalMissingPayment");
   if (note.startsWith("Final charged total is missing")) return t("review.totalMissing");
   if (note.startsWith("The charged total differs")) return t("review.totalDifference");
@@ -99,7 +105,10 @@ export default function ScanWorkspace() {
   const [isDragging, setIsDragging] = useState<ReceiptRole | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [isScanning, setIsScanning] = useState(false);
+  const [taxManuallyEdited, setTaxManuallyEdited] = useState(false);
   const [tipManuallyEdited, setTipManuallyEdited] = useState(false);
+  const [includeTax, setIncludeTax] = useState(true);
+  const [includeTip, setIncludeTip] = useState(true);
   const [reviewAcknowledged, setReviewAcknowledged] = useState(false);
   const [selectedGroupId, setSelectedGroupId] = useState("");
   const [isSendingToGroup, setIsSendingToGroup] = useState(false);
@@ -125,9 +134,14 @@ export default function ScanWorkspace() {
     [receipt],
   );
 
-  const calculatedTotal = useMemo(
+  const originalCalculatedTotal = useMemo(
     () => calculatedSubtotal + (receipt?.tax ?? 0) + (receipt?.tip ?? 0),
     [calculatedSubtotal, receipt?.tax, receipt?.tip],
+  );
+
+  const splitCalculatedTotal = useMemo(
+    () => calculatedSubtotal + (includeTax ? receipt?.tax ?? 0 : 0) + (includeTip ? receipt?.tip ?? 0 : 0),
+    [calculatedSubtotal, includeTax, includeTip, receipt?.tax, receipt?.tip],
   );
 
   const uploadCount = Number(Boolean(selectedFiles.itemized)) + Number(Boolean(selectedFiles.payment));
@@ -146,7 +160,10 @@ export default function ScanWorkspace() {
     setIsScanning(true);
     setReceipt(null);
     setReview(null);
+    setTaxManuallyEdited(false);
     setTipManuallyEdited(false);
+    setIncludeTax(true);
+    setIncludeTip(true);
     setReviewAcknowledged(false);
     setError(null);
     setNotice(t("scan.readingReceipts", { receipts: uploads.length === 2 ? t("scan.bothReceipts") : t("scan.yourReceipt") }));
@@ -164,6 +181,10 @@ export default function ScanWorkspace() {
 
       setReceipt(payload.receipt);
       setReview(payload.review);
+      setTaxManuallyEdited(false);
+      setTipManuallyEdited(false);
+      setIncludeTax(!payload.review.fields.some((field) => field === "tax" || field.startsWith("tax.")));
+      setIncludeTip(!payload.review.fields.some((field) => field === "tip" || field.startsWith("tip.")));
       setReviewAcknowledged(false);
       setNotice(payload.review.needsConfirmation
         ? t("scan.noticeConfirm")
@@ -240,7 +261,10 @@ export default function ScanWorkspace() {
     setIsLoading(true);
     setError(null);
     setReview(null);
+    setTaxManuallyEdited(false);
     setTipManuallyEdited(false);
+    setIncludeTax(true);
+    setIncludeTip(true);
     setReviewAcknowledged(false);
 
     try {
@@ -249,7 +273,10 @@ export default function ScanWorkspace() {
       const sample = (await response.json()) as Receipt;
       setReceipt(sample);
       setReview(null);
+      setTaxManuallyEdited(false);
       setTipManuallyEdited(false);
+      setIncludeTax(true);
+      setIncludeTip(true);
       setReviewAcknowledged(false);
       setNotice(t("scan.noticeDemoLoaded"));
     } catch {
@@ -273,6 +300,21 @@ export default function ScanWorkspace() {
       });
       return { ...current, items };
     });
+  }
+
+  function majorFromMinor(amountMinor: number, currency: CurrencyCode) {
+    return Number((amountMinor / 10 ** CURRENCY_DECIMALS[currency]).toFixed(CURRENCY_DECIMALS[currency]));
+  }
+
+  function applySuggestedTipPercentage(percentage: number) {
+    if (!receipt || !receipt.currency) return;
+    const basisMajor = receipt.tipBasis === "post_tax_subtotal" ? receipt.subtotal + receipt.tax : receipt.subtotal;
+    const basisMinor = majorToMinorUnits(basisMajor, receipt.currency);
+    const ppm = parsePercentageToPpm(String(percentage));
+    if (ppm === null) return;
+    const tipMinor = calculatePercentageMinorUnits(basisMinor, ppm);
+    setTipManuallyEdited(true);
+    updateReceipt({ tip: majorFromMinor(tipMinor, receipt.currency), tipPercentage: percentage, tipInferred: false });
   }
 
   function addItem() {
@@ -407,16 +449,26 @@ export default function ScanWorkspace() {
             </div>
 
             <div className="grid gap-3 sm:grid-cols-2">
-              <label className="flex items-center justify-between rounded-2xl border border-[#eeeae2] bg-[#f7f6f1] px-4 py-3 text-sm text-[#77766d] transition focus-within:border-[#ed795d] focus-within:bg-white"><span>{t("scan.tax")}</span><span className="flex items-center gap-1 font-bold text-[#25251f]"><span>{receipt.currency ?? "?"}</span><input type="number" min="0" step={CURRENCY_DECIMALS[receipt.currency ?? "USD"] === 0 ? "1" : "0.01"} value={receipt.tax} aria-invalid={fieldNeedsReview("tax")} onChange={(event) => updateReceipt({ tax: Math.max(0, Number(event.target.value) || 0) })} className={`w-16 rounded px-1 text-right outline-none ${fieldNeedsReview("tax") ? "bg-[#fffaf0]" : "bg-transparent"}`} /></span></label>
-              <label className="flex items-center justify-between rounded-2xl border border-[#eeeae2] bg-[#f7f6f1] px-4 py-3 text-sm text-[#77766d] transition focus-within:border-[#ed795d] focus-within:bg-white"><span>{t("scan.tip")}</span><span className="flex items-center gap-1 font-bold text-[#25251f]"><span>{receipt.currency ?? "?"}</span><input type="number" min="0" step={CURRENCY_DECIMALS[receipt.currency ?? "USD"] === 0 ? "1" : "0.01"} placeholder={t("scan.enter")} value={tipNeedsManualEntry ? "" : receipt.tip} aria-invalid={fieldNeedsReview("tip")} onChange={(event) => { setTipManuallyEdited(event.target.value.trim() !== ""); updateReceipt({ tip: event.target.value === "" ? 0 : Math.max(0, Number(event.target.value) || 0) }); }} className={`w-20 rounded px-1 text-right outline-none placeholder:text-[#aaa69c] ${fieldNeedsReview("tip") ? "bg-[#fffaf0]" : "bg-transparent"}`} /></span></label>
+              <div className={`rounded-2xl border border-[#eeeae2] bg-[#f7f6f1] px-4 py-3 text-sm text-[#77766d] transition focus-within:border-[#ed795d] focus-within:bg-white ${fieldNeedsReview("tax") ? "border-[#e6c66f] bg-[#fffaf0]" : ""}`}>
+                <label className="flex items-center justify-between gap-3"><span>{t("scan.tax")}{receipt.taxPercentage !== null && receipt.taxPercentage !== undefined ? <span className="ml-1 text-xs text-[#aaa69c]">({receipt.taxPercentage}%)</span> : null}</span><span className="flex items-center gap-1 font-bold text-[#25251f]"><span>{receipt.currency ?? "?"}</span><input type="number" min="0" step={CURRENCY_DECIMALS[receipt.currency ?? "USD"] === 0 ? "1" : "0.01"} value={receipt.tax} aria-invalid={fieldNeedsReview("tax")} onChange={(event) => { setTaxManuallyEdited(true); setIncludeTax(true); updateReceipt({ tax: Math.max(0, Number(event.target.value) || 0), taxPercentage: null, taxInferred: false }); }} className="w-16 rounded px-1 text-right outline-none" /></span></label>
+                <label className="mt-3 flex cursor-pointer items-start gap-2 text-xs leading-5 text-[#77766d]"><input type="checkbox" checked={includeTax} onChange={(event) => setIncludeTax(event.target.checked)} className="mt-0.5 accent-[#ed795d]" />{t("scan.includeTax")}</label>
+                {receipt.taxStatus === "included" && <p className="mt-2 text-xs leading-5 text-[#8a6d2f]">{t("scan.taxIncluded")}</p>}
+              </div>
+              <div className={`rounded-2xl border border-[#eeeae2] bg-[#f7f6f1] px-4 py-3 text-sm text-[#77766d] transition focus-within:border-[#ed795d] focus-within:bg-white ${fieldNeedsReview("tip") ? "border-[#e6c66f] bg-[#fffaf0]" : ""}`}>
+                <label className="flex items-center justify-between gap-3"><span>{t("scan.tip")}{receipt.tipPercentage !== null && receipt.tipPercentage !== undefined ? <span className="ml-1 text-xs text-[#aaa69c]">({receipt.tipPercentage}%)</span> : null}</span><span className="flex items-center gap-1 font-bold text-[#25251f]"><span>{receipt.currency ?? "?"}</span><input type="number" min="0" step={CURRENCY_DECIMALS[receipt.currency ?? "USD"] === 0 ? "1" : "0.01"} placeholder={t("scan.enter")} value={tipNeedsManualEntry ? "" : receipt.tip} aria-invalid={fieldNeedsReview("tip")} onChange={(event) => { setTipManuallyEdited(event.target.value.trim() !== ""); setIncludeTip(true); updateReceipt({ tip: event.target.value === "" ? 0 : Math.max(0, Number(event.target.value) || 0), tipPercentage: null, tipInferred: false }); }} className="w-20 rounded px-1 text-right outline-none placeholder:text-[#aaa69c]" /></span></label>
+                <label className="mt-3 flex cursor-pointer items-start gap-2 text-xs leading-5 text-[#77766d]"><input type="checkbox" checked={includeTip} onChange={(event) => setIncludeTip(event.target.checked)} className="mt-0.5 accent-[#ed795d]" />{t("scan.includeTip")}</label>
+                {(receipt.suggestedTipPercentages?.length ?? 0) > 0 && <fieldset className="mt-3"><legend className="mb-2 text-[11px] font-bold uppercase tracking-[0.08em] text-[#aaa69c]">{t("scan.suggestedTips")}</legend><div className="flex flex-wrap gap-2">{receipt.suggestedTipPercentages?.map((percentage) => <button key={percentage} type="button" onClick={() => applySuggestedTipPercentage(percentage)} aria-label={`${t("scan.chooseTip")}: ${percentage}%`} className="min-h-8 rounded-full border border-[#ead8ce] bg-white px-3 text-xs font-extrabold text-[#a45c4b] transition hover:-translate-y-0.5 hover:border-[#ed795d] hover:bg-[#fff5f1]">{percentage}%</button>)}</div></fieldset>}
+              </div>
             </div>
 
             <div className={`rounded-[1.65rem] p-5 text-white shadow-[0_16px_34px_rgba(37,37,31,0.16)] ${fieldNeedsReview("total") ? "border-2 border-[#e6c66f] bg-[#302d24]" : "bg-[#25251f]"}`}>
               <div className="flex items-center justify-between text-sm text-[#c7c4bb]"><span>{t("scan.subtotal")}</span><span>{formatMajorUnits(calculatedSubtotal, receipt.currency ?? "USD")}</span></div>
-              <div className="mt-2 flex items-center justify-between text-sm text-[#c7c4bb]"><span>{t("scan.taxAndTip")}</span><span>{formatMajorUnits(receipt.tax + receipt.tip, receipt.currency ?? "USD")}</span></div>
+              <div className="mt-2 flex items-center justify-between text-sm text-[#c7c4bb]"><span>{t("scan.taxAndTip")}</span><span>{formatMajorUnits((includeTax ? receipt.tax : 0) + (includeTip ? receipt.tip : 0), receipt.currency ?? "USD")}</span></div>
               <div className="my-4 border-t border-white/15" />
-              <div className="flex items-end justify-between"><span className="font-bold">{t("scan.chargedTotal")}</span><strong className="text-right text-3xl font-extrabold tracking-tight"><CurrencyAmount amountMinor={majorToMinorUnits(receipt.total, receipt.currency ?? "USD")} originalCurrency={receipt.currency ?? "USD"} /></strong></div>
-              {Math.abs(receipt.total - calculatedTotal) > 0.05 && <p className="mt-3 text-xs leading-5 text-[#f4d578]">{t("scan.calculatedFromFields", { amount: formatMajorUnits(calculatedTotal, receipt.currency ?? "USD") })}</p>}
+              <div className="flex items-end justify-between"><span className="font-bold">{t("scan.splitTotal")}</span><strong className="text-right text-3xl font-extrabold tracking-tight">{formatMajorUnits(splitCalculatedTotal, receipt.currency ?? "USD")}</strong></div>
+              <div className="mt-2 flex items-center justify-between text-xs text-[#c7c4bb]"><span>{t("scan.originalReceiptTotal")}</span><CurrencyAmount amountMinor={majorToMinorUnits(receipt.total, receipt.currency ?? "USD")} originalCurrency={receipt.currency ?? "USD"} /></div>
+              {Math.abs(receipt.total - originalCalculatedTotal) > 0.05 && <p className="mt-3 text-xs leading-5 text-[#f4d578]">{t("scan.calculatedFromFields", { amount: formatMajorUnits(originalCalculatedTotal, receipt.currency ?? "USD") })}</p>}
+              {(!includeTax || !includeTip) && <p className="mt-3 text-xs leading-5 text-[#f4d578]">{t("scan.excludedChargesNote")}</p>}
             </div>
 
             {(review?.needsReview || review?.needsConfirmation) && <label className="flex cursor-pointer items-start gap-3 rounded-2xl border border-[#e6c66f] bg-[#fffaf0] px-4 py-3 text-sm leading-6 text-[#77684d]">
@@ -442,16 +494,17 @@ export default function ScanWorkspace() {
               if (!receipt) return;
               setError(null);
               const receiptReview: ReceiptReview = review ?? { needsReview: false, needsConfirmation: false, confidence: "high", fields: [], notes: [] };
-              const tipConfirmed = tipManuallyEdited || !fieldNeedsReview("tip");
-              const validation = validateReceiptForTransfer(receipt, receiptReview, tipConfirmed, reviewAcknowledged);
+              const taxConfirmed = !includeTax || taxManuallyEdited || !fieldNeedsReview("tax") || Boolean(receipt.taxInferred && reviewAcknowledged);
+              const tipConfirmed = !includeTip || tipManuallyEdited || !fieldNeedsReview("tip") || Boolean(receipt.tipInferred && reviewAcknowledged);
+              const validation = validateReceiptForTransfer(receipt, receiptReview, tipConfirmed, reviewAcknowledged, [], { includeTax, includeTip, taxConfirmed });
               if (!validation.valid) {
-                const key = validation.flags.includes("tip") ? "scan.transferTipError" : validation.flags.includes("review") ? "scan.transferReviewError" : validation.flags.includes("subtotal") || validation.flags.includes("total") ? "scan.transferTotalsError" : "scan.transferDataError";
+                const key = validation.flags.includes("tip") ? "scan.transferTipError" : validation.flags.includes("tax") ? "scan.transferChargeError" : validation.flags.includes("review") ? "scan.transferReviewError" : validation.flags.includes("subtotal") || validation.flags.includes("total") ? "scan.transferTotalsError" : "scan.transferDataError";
                 setError(t(key));
                 return;
               }
               setIsSendingToGroup(true);
               try {
-                saveReceiptTransfer(createReceiptTransfer(selectedGroupId, receipt, receiptReview, tipConfirmed, reviewAcknowledged));
+                saveReceiptTransfer(createReceiptTransfer(selectedGroupId, receipt, receiptReview, { includeTax, includeTip, taxConfirmed, tipConfirmed, reviewAcknowledged }));
                 router.push(`/groups/${encodeURIComponent(selectedGroupId)}/expenses/new?fromReceipt=${encodeURIComponent(receipt.id)}`);
               } catch {
                 setIsSendingToGroup(false);

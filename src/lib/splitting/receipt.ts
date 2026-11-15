@@ -16,6 +16,9 @@ export type SplitReceiptInput = {
   receipt: Receipt;
   memberIds: string[];
   tipConfirmed: boolean;
+  taxConfirmed?: boolean;
+  includeTax?: boolean;
+  includeTip?: boolean;
   reviewFlags: Pick<ReceiptReview, "needsReview" | "needsConfirmation" | "fields" | "notes">;
   reviewAcknowledged?: boolean;
   adjustments?: ReceiptAdjustment[];
@@ -38,6 +41,9 @@ export type SplitResult = {
   currency: CurrencyCode;
   canFinalize: boolean;
   receiptTotalCents: number;
+  splitTotalCents: number;
+  includedTaxCents: number;
+  includedTipCents: number;
   allocatedTotalCents: number;
   totalsMatch: boolean;
   reviewFlags: string[];
@@ -51,6 +57,15 @@ export type ReceiptTransferValidation = {
   notes: string[];
   receiptSubtotalCents: number | null;
   receiptTotalCents: number | null;
+  splitTotalCents: number | null;
+  includedTaxCents: number;
+  includedTipCents: number;
+};
+
+type ChargeSelection = {
+  includeTax?: boolean;
+  includeTip?: boolean;
+  taxConfirmed?: boolean;
 };
 
 function minorUnits(amount: number, currency: CurrencyCode): number | null {
@@ -121,6 +136,10 @@ function validateAdjustments(adjustments: ReceiptAdjustment[], flags: string[], 
   }
 }
 
+function isChargeField(field: string, charge: "tax" | "tip") {
+  return field === charge || field.startsWith(`${charge}.`) || field.startsWith(`${charge}[`);
+}
+
 /** Validates the receipt boundary before it is handed to a group. */
 export function validateReceiptForTransfer(
   receipt: Receipt,
@@ -128,12 +147,16 @@ export function validateReceiptForTransfer(
   tipConfirmed: boolean,
   reviewAcknowledged = false,
   adjustments: ReceiptAdjustment[] = [],
+  selection: ChargeSelection = {},
 ): ReceiptTransferValidation {
   const flags: string[] = [];
   const notes: string[] = [];
   const currency = isCurrencyCode(receipt.currency) ? receipt.currency : null;
   if (!currency) { flags.push("currency"); notes.push("Receipt currency is missing or unsupported. Confirm it before sending this receipt to a group."); }
   const arithmeticCurrency = currency ?? "USD";
+  const includeTax = selection.includeTax ?? true;
+  const includeTip = selection.includeTip ?? true;
+  const taxConfirmed = selection.taxConfirmed ?? !reviewFlags.fields.some((field) => isChargeField(field, "tax"));
   const subtotalCents = minorUnits(receipt.subtotal, arithmeticCurrency);
   const totalCents = minorUnits(receipt.total, arithmeticCurrency);
   const taxCents = minorUnits(receipt.tax, arithmeticCurrency);
@@ -141,8 +164,8 @@ export function validateReceiptForTransfer(
 
   if (subtotalCents === null) { flags.push("subtotal"); notes.push("Subtotal is missing or invalid."); }
   if (totalCents === null) { flags.push("total"); notes.push("Receipt total is missing or invalid."); }
-  if (taxCents === null) { flags.push("tax"); notes.push("Tax is missing or invalid."); }
-  if (tipCents === null) { flags.push("tip"); notes.push("Tip is missing or invalid."); }
+  if (includeTax && taxCents === null) { flags.push("tax"); notes.push("Tax is missing or invalid. Enter it or leave tax out of the split."); }
+  if (includeTip && tipCents === null) { flags.push("tip"); notes.push("Tip is missing or invalid. Enter it or leave tip out of the split."); }
 
   let itemSubtotalCents = 0;
   for (const [index, item] of receipt.items.entries()) {
@@ -160,14 +183,19 @@ export function validateReceiptForTransfer(
     notes.push("The itemized subtotal does not match the extracted item totals.");
   }
 
-  if (!tipConfirmed) { flags.push("tip"); notes.push("Confirm the actual tip before sending this receipt to a group."); }
-  if (reviewFlags.needsConfirmation || (reviewFlags.needsReview && !reviewAcknowledged)) {
+  if (includeTax && !taxConfirmed) { flags.push("tax"); notes.push("Confirm the tax amount before sending this receipt to a group, or leave tax out of the split."); }
+  if (includeTip && !tipConfirmed) { flags.push("tip"); notes.push("Confirm the actual tip before sending this receipt to a group, or leave tip out of the split."); }
+  const relevantReviewFields = reviewFlags.fields.filter((field) => (includeTax || !isChargeField(field, "tax")) && (includeTip || !isChargeField(field, "tip")));
+  const relevantReviewNotes = reviewFlags.notes.filter((note) => (includeTax || !/\btax\b/i.test(note)) && (includeTip || !/\btip\b/i.test(note)));
+  if (reviewFlags.needsConfirmation || relevantReviewFields.length > 0 || (reviewFlags.needsReview && relevantReviewNotes.length > 0)) {
     flags.push("review");
     notes.push("Review and confirm the highlighted receipt details before continuing.");
   }
 
   validateAdjustments(adjustments, flags, notes);
-  if (totalCents !== null && subtotalCents !== null && taxCents !== null && tipCents !== null && !flags.includes("subtotal") && !flags.includes("adjustment")) {
+  const taxKnownForOriginal = taxCents !== null && (includeTax || taxConfirmed || !reviewFlags.fields.some((field) => isChargeField(field, "tax")));
+  const tipKnownForOriginal = tipCents !== null && (includeTip || tipConfirmed || !reviewFlags.fields.some((field) => isChargeField(field, "tip")));
+  if (totalCents !== null && subtotalCents !== null && taxCents !== null && tipCents !== null && taxKnownForOriginal && tipKnownForOriginal && !flags.includes("subtotal") && !flags.includes("adjustment")) {
     const adjustmentTotal = adjustments.reduce((sum, adjustment) => sum + adjustmentDelta(adjustment), 0);
     const expected = subtotalCents + taxCents + tipCents + adjustmentTotal;
     if (expected !== totalCents) {
@@ -176,15 +204,22 @@ export function validateReceiptForTransfer(
     }
   }
 
-  return { valid: flags.length === 0, flags: [...new Set(flags)], notes, receiptSubtotalCents: subtotalCents, receiptTotalCents: totalCents };
+  const includedTaxCents = includeTax ? taxCents ?? 0 : 0;
+  const includedTipCents = includeTip ? tipCents ?? 0 : 0;
+  const splitSubtotalCents = itemSubtotalCents;
+  const splitTotalCents = Number.isSafeInteger(splitSubtotalCents + includedTaxCents + includedTipCents)
+    ? splitSubtotalCents + includedTaxCents + includedTipCents
+    : null;
+
+  return { valid: flags.length === 0, flags: [...new Set(flags)], notes, receiptSubtotalCents: subtotalCents, receiptTotalCents: totalCents, splitTotalCents, includedTaxCents, includedTipCents };
 }
 
 /** Calculates an exact, itemized split using integer cents and stable largest-remainder rounding. */
 export function calculateReceiptSplit(input: SplitReceiptInput): SplitResult {
-  const { receipt, memberIds, reviewFlags, tipConfirmed, reviewAcknowledged = false, adjustments = [] } = input;
+  const { receipt, memberIds, reviewFlags, tipConfirmed, taxConfirmed, includeTax = true, includeTip = true, reviewAcknowledged = false, adjustments = [] } = input;
   const currency = isCurrencyCode(receipt.currency) ? receipt.currency : "USD";
   const orderedMemberIds = [...new Set(memberIds)];
-  const validation = validateReceiptForTransfer(receipt, reviewFlags, tipConfirmed, reviewAcknowledged, adjustments);
+  const validation = validateReceiptForTransfer(receipt, reviewFlags, tipConfirmed, reviewAcknowledged, adjustments, { includeTax, includeTip, taxConfirmed });
   const flags = [...validation.flags];
   const notes = [...validation.notes];
   const validMembers = new Set(orderedMemberIds);
@@ -211,8 +246,8 @@ export function calculateReceiptSplit(input: SplitReceiptInput): SplitResult {
   }
 
   const totalBasis = [...basis.values()].reduce((sum, value) => sum + value, 0);
-  const taxCents = minorUnits(receipt.tax, currency) ?? 0;
-  const tipCents = minorUnits(receipt.tip, currency) ?? 0;
+  const taxCents = includeTax ? minorUnits(receipt.tax, currency) ?? 0 : 0;
+  const tipCents = includeTip ? minorUnits(receipt.tip, currency) ?? 0 : 0;
   let tax = new Map<string, number>();
   let tip = new Map<string, number>();
   if (orderedMemberIds.length > 0 && totalBasis > 0) {
@@ -246,7 +281,8 @@ export function calculateReceiptSplit(input: SplitReceiptInput): SplitResult {
   });
   const allocatedTotalCents = members.reduce((sum, member) => sum + member.finalCents, 0);
   const receiptTotalCents = validation.receiptTotalCents ?? 0;
-  const totalsMatch = allocatedTotalCents === receiptTotalCents;
+  const splitTotalCents = validation.splitTotalCents ?? 0;
+  const totalsMatch = allocatedTotalCents === splitTotalCents;
   if (!totalsMatch) { flags.push("total"); notes.push("The calculated member totals do not match the final receipt total."); }
   if (validation.receiptSubtotalCents !== null && totalBasis !== validation.receiptSubtotalCents) {
     flags.push("subtotal");
@@ -258,6 +294,9 @@ export function calculateReceiptSplit(input: SplitReceiptInput): SplitResult {
     currency,
     canFinalize: flags.length === 0 && totalsMatch,
     receiptTotalCents,
+    splitTotalCents,
+    includedTaxCents: validation.includedTaxCents,
+    includedTipCents: validation.includedTipCents,
     allocatedTotalCents,
     totalsMatch,
     reviewFlags: [...new Set(flags)],

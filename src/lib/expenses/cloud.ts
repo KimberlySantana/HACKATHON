@@ -1,9 +1,16 @@
-import { calculateItemSharesCents } from "./calculations.ts";
+import { calculateItemSharesCents, expenseChargeCents } from "./calculations.ts";
 import type { ExpenseRecord } from "./types.ts";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { isCurrencyCode, type CurrencyCode } from "../currency/types.ts";
 
 type CloudRow = Record<string, unknown>;
+
+/** The shared database has not received the currency/charge-selection migrations yet. */
+export const LEGACY_CLOUD_SCHEMA_CURRENCY_ERROR = "LEGACY_CLOUD_SCHEMA_CURRENCY_UNAVAILABLE";
+
+export function isLegacyCloudSchemaCurrencyError(cause: unknown): boolean {
+  return cause instanceof Error && cause.message === LEGACY_CLOUD_SCHEMA_CURRENCY_ERROR;
+}
 
 function cents(value: unknown): number {
   const amount = typeof value === "string" ? Number(value) : value;
@@ -29,7 +36,40 @@ export function toCloudExpensePayload(expense: ExpenseRecord, groupMemberIds: st
     description: expense.description,
     tax_cents: expense.taxCents,
     tip_cents: expense.tipCents,
+    tax_amount_known: expense.taxAmountKnown ?? true,
+    tip_amount_known: expense.tipAmountKnown ?? true,
+    include_tax: expense.includeTax ?? true,
+    include_tip: expense.includeTip ?? true,
+    receipt_total_cents: expense.originalReceiptTotalCents ?? null,
     currency: expense.currency ?? "USD",
+    created_at: expense.createdAt,
+    items: expense.items.map((item, sortOrder) => ({
+      id: item.id,
+      name: item.name,
+      quantity: item.quantity,
+      unit_price_cents: item.unitPriceCents,
+      sort_order: sortOrder,
+      splits: [...calculateItemSharesCents(item, groupMemberIds)].map(([member_id, amount_cents]) => ({ member_id, amount_cents })),
+    })),
+  };
+}
+
+/**
+ * Payload for the currently deployed atomic-save RPC.
+ *
+ * The old function ignores unknown JSON keys, but it only persists tax_cents and
+ * tip_cents. Store effective charges so an intentionally excluded charge does
+ * not reappear in settlement after the expense is loaded from Supabase.
+ */
+export function toLegacyCloudExpensePayload(expense: ExpenseRecord, groupMemberIds: string[]) {
+  const charges = expenseChargeCents(expense);
+  return {
+    id: expense.id,
+    group_id: expense.groupId,
+    paid_by_member_id: expense.paidByMemberId,
+    description: expense.description,
+    tax_cents: charges.taxCents,
+    tip_cents: charges.tipCents,
     created_at: expense.createdAt,
     items: expense.items.map((item, sortOrder) => ({
       id: item.id,
@@ -85,6 +125,11 @@ export function mapCloudExpenseRows(
       paidByMemberId: text(row.paid_by_member_id, "expense paid_by_member_id"),
       taxCents: cents(row.tax_cents),
       tipCents: cents(row.tip_cents),
+      taxAmountKnown: row.tax_amount_known === undefined ? true : Boolean(row.tax_amount_known),
+      tipAmountKnown: row.tip_amount_known === undefined ? true : Boolean(row.tip_amount_known),
+      includeTax: row.include_tax === undefined ? true : Boolean(row.include_tax),
+      includeTip: row.include_tip === undefined ? true : Boolean(row.include_tip),
+      originalReceiptTotalCents: row.receipt_total_cents === null || row.receipt_total_cents === undefined ? undefined : cents(row.receipt_total_cents),
       currency: currency(row.currency ?? "USD"),
       createdAt: text(row.created_at, "expense created_at"),
       items: itemsByExpense.get(id) ?? [],
@@ -95,7 +140,8 @@ export function mapCloudExpenseRows(
 export async function loadCloudExpenses(client: SupabaseClient, groupId: string, memberIds: string[]) {
   const { data: expenseRows, error: expenseError } = await client
     .from("expenses")
-    .select("id,group_id,description,paid_by_member_id,tax_cents,tip_cents,currency,created_at")
+    // Keep this projection compatible with the deployed pre-migration schema.
+    .select("id,group_id,description,paid_by_member_id,tax_cents,tip_cents,created_at")
     .eq("group_id", groupId)
     .order("created_at", { ascending: false });
   if (expenseError) throw expenseError;
@@ -124,8 +170,9 @@ export async function loadCloudExpenses(client: SupabaseClient, groupId: string,
 }
 
 export async function saveCloudExpense(client: SupabaseClient, expense: ExpenseRecord, memberIds: string[], allowUpdate = true) {
+  if ((expense.currency ?? "USD") !== "USD") throw new Error(LEGACY_CLOUD_SCHEMA_CURRENCY_ERROR);
   const { data, error } = await client.rpc("save_expense", {
-    p_expense: toCloudExpensePayload(expense, memberIds),
+    p_expense: toLegacyCloudExpensePayload(expense, memberIds),
     p_allow_update: allowUpdate,
   });
   if (error) throw error;

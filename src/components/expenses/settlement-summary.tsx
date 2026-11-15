@@ -4,12 +4,15 @@ import Link from "next/link";
 import { useMemo, useState, type ReactNode } from "react";
 import { useSavedGroups } from "@/components/groups/use-saved-groups";
 import { useGroupExpenses, type ExpenseStorageMode } from "@/components/expenses/use-group-expenses";
-import { calculateExpenseShares, calculateSettlement, getExpenseSubtotalCents } from "@/lib/expenses/calculations";
+import { useLanguage } from "@/components/i18n";
+import { calculateExpenseShares, calculateSettlement, expenseChargeCents, getExpenseSubtotalCents } from "@/lib/expenses/calculations";
 import { getUnassignedItems } from "@/lib/expenses/assignments";
+import { isLegacyCloudSchemaCurrencyError } from "@/lib/expenses/cloud";
 import type { ExpenseRecord } from "@/lib/expenses/types";
 import { CurrencyAmount } from "@/components/currency";
 
 export function SettlementSummary({ groupId }: { groupId: string }) {
+  const { t } = useLanguage();
   const { groups, loading: groupsLoading, storageError } = useSavedGroups();
   const saved = groups.find((entry) => entry.group.id === groupId);
   const store = useGroupExpenses(groupId, saved?.members ?? []);
@@ -41,7 +44,7 @@ export function SettlementSummary({ groupId }: { groupId: string }) {
     setBusyExpenseId(expense.id);
     setActionError(null);
     try { await store.importOffline(expense.id); }
-    catch (cause) { setActionError(cause instanceof Error ? cause.message : "Could not import this expense."); }
+    catch (cause) { setActionError(isLegacyCloudSchemaCurrencyError(cause) ? t("expense.currencyPersistenceUnavailable") : cause instanceof Error ? cause.message : "Could not import this expense."); }
     finally { setBusyExpenseId(null); }
   }
 
@@ -81,14 +84,15 @@ export function SettlementSummary({ groupId }: { groupId: string }) {
 function ExpenseCard({ expense, names, members, editUrl, onDelete, deleting, action }: { expense: ExpenseRecord; names: Map<string, string>; members: string[]; editUrl: string; onDelete: () => void; deleting: boolean; action?: ReactNode }) {
   const unassignedItems = getUnassignedItems(expense.items, members);
   const shares = unassignedItems.length === 0 ? calculateExpenseShares(expense, members) : null;
-  const total = getExpenseSubtotalCents(expense) + expense.taxCents + expense.tipCents;
+  const charges = expenseChargeCents(expense);
+  const total = getExpenseSubtotalCents(expense) + charges.taxCents + charges.tipCents;
   const currency = expense.currency ?? "USD";
   return <details className={`rounded-2xl border p-4 ${unassignedItems.length ? "border-[#e8b1a5] bg-[#fffaf8]" : "border-[#eeeae2]"}`}>
     <summary className="flex cursor-pointer list-none items-center justify-between gap-3"><span className="min-w-0"><strong className="block truncate">{expense.description}</strong><span className="mt-1 block text-xs text-[#88867d]">Paid by {names.get(expense.paidByMemberId)} · {expense.items.length} {expense.items.length === 1 ? "item" : "items"}</span></span><CurrencyAmount amountMinor={total} originalCurrency={currency} className="shrink-0 font-bold text-right" /></summary>
     <div className="mt-4 space-y-2 border-t border-[#eeeae2] pt-3 text-sm">
       {unassignedItems.length > 0 && <p className="rounded-xl bg-[#fff1ee] p-3 text-sm text-[#a64531]">This expense has items without a person assigned. <Link href={editUrl} className="font-bold underline underline-offset-2">Edit it to fix the split.</Link></p>}
       {expense.items.map((item) => <div key={item.id} className="flex justify-between gap-3"><span>{item.quantity} × {item.name}<span className="ml-2 text-xs text-[#88867d]">{item.assignedMemberIds.map((id) => names.get(id)).filter(Boolean).join(", ") || (unassignedItems.includes(item) ? "Needs a person assigned" : "")}</span></span><CurrencyAmount amountMinor={item.quantity * item.unitPriceCents} originalCurrency={currency} /></div>)}
-      <div className="flex justify-between text-[#77766d]"><span>Tax</span><CurrencyAmount amountMinor={expense.taxCents} originalCurrency={currency} /></div><div className="flex justify-between text-[#77766d]"><span>Tip</span><CurrencyAmount amountMinor={expense.tipCents} originalCurrency={currency} /></div>
+      <div className="flex justify-between text-[#77766d]"><span>Tax</span><CurrencyAmount amountMinor={charges.taxCents} originalCurrency={currency} /></div><div className="flex justify-between text-[#77766d]"><span>Tip</span><CurrencyAmount amountMinor={charges.tipCents} originalCurrency={currency} /></div>
       {shares && <div className="border-t border-dashed border-[#dedbd1] pt-2 font-semibold">{members.map((memberId) => <div key={memberId} className="flex justify-between py-1"><span>{names.get(memberId)} share</span><CurrencyAmount amountMinor={shares.get(memberId) ?? 0} originalCurrency={currency} /></div>)}</div>}
       <div className="mt-3 flex flex-wrap items-center gap-2"><Link href={editUrl} className="inline-flex min-h-9 items-center rounded-lg border border-[#e7e2d8] px-3 text-xs font-bold text-[#625f56]">Edit</Link><button type="button" disabled={deleting} onClick={onDelete} className="min-h-9 rounded-lg border border-[#f0d1c9] px-3 text-xs font-bold text-[#a64531] disabled:opacity-60">{deleting ? "Deleting…" : "Delete"}</button>{action}</div>
     </div>

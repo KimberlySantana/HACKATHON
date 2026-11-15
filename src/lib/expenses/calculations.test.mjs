@@ -24,6 +24,11 @@ test("splits assigned items and allocates tax and tip proportionally with exact 
   assert.equal([...shares.values()].reduce((sum, cents) => sum + cents, 0), 306);
 });
 
+test("excluded charges stay in the record but contribute zero to member shares", () => {
+  const shares = calculateExpenseShares({ ...splitReceipt, includeTax: false, includeTip: false }, ["a", "b"]);
+  assert.deepEqual([...shares], [["a", 51], ["b", 250]]);
+});
+
 test("distributes odd cents deterministically in group-member order", () => {
   const shares = calculateExpenseShares({ ...splitReceipt, items: [{ id: "i1", name: "Snack", quantity: 1, unitPriceCents: 100, assignedMemberIds: ["a", "b", "c"] }], taxCents: 0, tipCents: 0 }, ["a", "b", "c"]);
   assert.deepEqual([...shares], [["a", 34], ["b", 33], ["c", 33]]);

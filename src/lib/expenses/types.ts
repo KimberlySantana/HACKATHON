@@ -19,6 +19,13 @@ export interface ExpenseRecord {
   items: ExpenseItemRecord[];
   taxCents: number;
   tipCents: number;
+  taxAmountKnown?: boolean;
+  tipAmountKnown?: boolean;
+  /** Whether the stored tax/tip amounts contribute to this group expense. */
+  includeTax?: boolean;
+  includeTip?: boolean;
+  /** Original printed receipt total, when this expense came from a receipt. */
+  originalReceiptTotalCents?: number;
   /** Original currency of this expense. Legacy local records may omit it and are treated as USD. */
   currency?: CurrencyCode;
   createdAt: string;

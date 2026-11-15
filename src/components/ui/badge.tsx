@@ -3,10 +3,10 @@ import { cn } from "@/lib/utils";
 
 type BadgeTone = "neutral" | "green" | "amber" | "coral";
 const tones: Record<BadgeTone, string> = {
-  neutral: "bg-lavender text-[#6e617b]",
+  neutral: "bg-lavender text-[#596780]",
   green: "bg-mint text-success",
   amber: "bg-warning-soft text-warning",
-  coral: "bg-accent-soft text-[#a4503b]",
+  coral: "bg-accent-soft text-[#3d7079]",
 };
 
 export function Badge({ tone = "neutral", className, ...props }: HTMLAttributes<HTMLSpanElement> & { tone?: BadgeTone }) {

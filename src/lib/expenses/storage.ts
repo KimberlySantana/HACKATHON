@@ -13,6 +13,11 @@ function isExpense(value: unknown): value is ExpenseRecord {
   return typeof value.id === "string" && typeof value.groupId === "string" &&
     typeof value.description === "string" && typeof value.paidByMemberId === "string" &&
     Number.isSafeInteger(value.taxCents) && Number(value.taxCents) >= 0 && Number.isSafeInteger(value.tipCents) && Number(value.tipCents) >= 0 &&
+    (value.taxAmountKnown === undefined || typeof value.taxAmountKnown === "boolean") &&
+    (value.tipAmountKnown === undefined || typeof value.tipAmountKnown === "boolean") &&
+    (value.includeTax === undefined || typeof value.includeTax === "boolean") &&
+    (value.includeTip === undefined || typeof value.includeTip === "boolean") &&
+    (value.originalReceiptTotalCents === undefined || (Number.isSafeInteger(value.originalReceiptTotalCents) && Number(value.originalReceiptTotalCents) >= 0)) &&
     typeof value.createdAt === "string" && (value.currency === undefined || isCurrencyCode(value.currency)) && value.items.every((item) => isRecord(item) &&
       typeof item.id === "string" && typeof item.name === "string" && Number.isInteger(item.quantity) && Number(item.quantity) > 0 &&
       Number.isSafeInteger(item.unitPriceCents) && Number(item.unitPriceCents) >= 0 && Array.isArray(item.assignedMemberIds) &&

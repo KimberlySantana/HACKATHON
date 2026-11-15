@@ -22,6 +22,55 @@ test("splits a shared odd-cent item and allocates tax and tip proportionally", (
   assert.equal(result.allocatedTotalCents, 306);
 });
 
+test("supports food-only, food-plus-tax, food-plus-tip, and full receipt selections", () => {
+  const cases = [
+    { name: "food only", includeTax: false, includeTip: false, expected: 301 },
+    { name: "food plus tax", includeTax: true, includeTip: false, expected: 304 },
+    { name: "food plus tip", includeTax: false, includeTip: true, expected: 303 },
+    { name: "food plus tax and tip", includeTax: true, includeTip: true, expected: 306 },
+  ];
+
+  for (const scenario of cases) {
+    const result = calculateReceiptSplit({
+      receipt,
+      memberIds: ["a", "b"],
+      tipConfirmed: scenario.includeTip,
+      taxConfirmed: true,
+      includeTax: scenario.includeTax,
+      includeTip: scenario.includeTip,
+      reviewFlags: review,
+      reviewAcknowledged: true,
+    });
+    assert.equal(result.canFinalize, true, scenario.name);
+    assert.equal(result.splitTotalCents, scenario.expected, scenario.name);
+    assert.equal(result.allocatedTotalCents, scenario.expected, scenario.name);
+  }
+});
+
+test("does not require a missing excluded charge and never treats it as a confirmed zero", () => {
+  const missingTax = { ...receipt, tax: Number.NaN, total: 3.03 };
+  const result = calculateReceiptSplit({
+    receipt: missingTax,
+    memberIds: ["a", "b"],
+    tipConfirmed: true,
+    taxConfirmed: false,
+    includeTax: false,
+    includeTip: true,
+    reviewFlags: { ...review, needsReview: true, fields: ["tax"], notes: ["Itemized tax is missing or unreadable."] },
+  });
+  assert.equal(result.canFinalize, true);
+  assert.equal(result.includedTaxCents, 0);
+  assert.equal(result.includedTipCents, 2);
+  assert.equal(result.splitTotalCents, 303);
+});
+
+test("still blocks a genuine original receipt discrepancy even when a charge is excluded", () => {
+  const validation = validateReceiptForTransfer({ ...receipt, total: 3 }, review, false, true, [], { includeTax: true, includeTip: false, taxConfirmed: true });
+  assert.equal(validation.valid, false);
+  assert.ok(validation.flags.includes("total"));
+  assert.equal(validation.splitTotalCents, 304);
+});
+
 test("requires every item to be assigned before finalization", () => {
   const result = calculateReceiptSplit({ receipt: { ...receipt, items: [{ ...receipt.items[0], assignedMemberIds: [] }, receipt.items[1]] }, memberIds: ["a", "b"], tipConfirmed: true, reviewFlags: review, reviewAcknowledged: true });
   assert.equal(result.canFinalize, false);

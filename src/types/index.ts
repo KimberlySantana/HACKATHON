@@ -1,4 +1,5 @@
 import type { CurrencyCode } from "@/lib/currency/types";
+import type { TaxBasis, TaxStatus, TipBasis } from "@/lib/finance/percentages";
 
 /** A shared contract for the group splitting and receipt scanning features. */
 export interface Group {
@@ -25,6 +26,14 @@ export interface Receipt {
   total: number;
   /** Currency visibly identified on the receipt; null means it needs review. */
   currency: CurrencyCode | null;
+  taxPercentage?: number | null;
+  tipPercentage?: number | null;
+  suggestedTipPercentages?: number[];
+  taxStatus?: TaxStatus;
+  taxBasis?: TaxBasis;
+  tipBasis?: TipBasis;
+  taxInferred?: boolean;
+  tipInferred?: boolean;
   items: ReceiptItem[];
 }
 

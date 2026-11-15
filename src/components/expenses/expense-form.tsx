@@ -9,17 +9,24 @@ import { useSavedGroups } from "@/components/groups/use-saved-groups";
 import { useGroupExpenses, type ExpenseStorageMode } from "@/components/expenses/use-group-expenses";
 import { calculateExpenseShares, formatCents, getExpenseSubtotalCents, parseMoneyToMinorUnits } from "@/lib/expenses/calculations";
 import { getUnassignedItems } from "@/lib/expenses/assignments";
+import { isLegacyCloudSchemaCurrencyError } from "@/lib/expenses/cloud";
 import { clearReceiptTransfer, readReceiptTransfer, receiptItemId, type PendingReceiptTransfer } from "@/lib/expenses/receipt-transfer";
 import type { ExpenseRecord } from "@/lib/expenses/types";
 import { CURRENCY_CODES, CURRENCY_DECIMALS, CURRENCY_LABELS, type CurrencyCode } from "@/lib/currency/types";
+import { calculatePercentageMinorUnits, formatPercentagePpm, parsePercentageToPpm, percentageFromMinorUnits, type TipBasis } from "@/lib/finance/percentages";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 
 interface DraftItem { id: string; name: string; quantity: string; unitPrice: string; assignedMemberIds: string[]; memberSharesCents?: Record<string, number>; }
+type EntryMode = "amount" | "percentage";
 const blankItem = (): DraftItem => ({ id: "new-item-1", name: "", quantity: "1", unitPrice: "", assignedMemberIds: [] });
 const moneyValue = (value: string, currency: CurrencyCode) => value.trim() === "" ? 0 : parseMoneyToMinorUnits(value, currency);
+const percentageValue = (baseMinorUnits: number, percentagePpm: number | null) => {
+  if (percentagePpm === null || !Number.isSafeInteger(baseMinorUnits) || baseMinorUnits < 0) return null;
+  try { return calculatePercentageMinorUnits(baseMinorUnits, percentagePpm); } catch { return null; }
+};
 const centsInput = (amount: number, currency: CurrencyCode) => {
   const decimals = CURRENCY_DECIMALS[currency];
   if (decimals === 0) return String(amount);
@@ -38,7 +45,20 @@ export function ExpenseForm({ groupId, expenseId, receiptId, offline = false }: 
   const [items, setItems] = useState<DraftItem[]>([blankItem()]);
   const [tax, setTax] = useState("");
   const [tip, setTip] = useState("");
+  const [taxMode, setTaxMode] = useState<EntryMode>("amount");
+  const [tipMode, setTipMode] = useState<EntryMode>("amount");
+  const [taxRate, setTaxRate] = useState("");
+  const [tipRate, setTipRate] = useState("");
+  const [tipBasis, setTipBasis] = useState<TipBasis>("pre_tax_subtotal");
+  const [includeTax, setIncludeTax] = useState(true);
+  const [includeTip, setIncludeTip] = useState(true);
+  const [taxKnown, setTaxKnown] = useState(true);
+  const [tipKnown, setTipKnown] = useState(true);
+  const [taxConfirmed, setTaxConfirmed] = useState(true);
+  const [tipConfirmed, setTipConfirmed] = useState(true);
+  const [percentageConfirmed, setPercentageConfirmed] = useState(true);
   const [currency, setCurrency] = useState<CurrencyCode>("USD");
+  const [originalReceiptTotalCents, setOriginalReceiptTotalCents] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [pendingOfflineExpense, setPendingOfflineExpense] = useState<ExpenseRecord | null>(null);
@@ -58,8 +78,21 @@ export function ExpenseForm({ groupId, expenseId, receiptId, offline = false }: 
     setDescription(editRecord.description);
     setPaidByMemberId(editRecord.paidByMemberId);
     setCurrency(editRecord.currency ?? "USD");
-    setTax(centsInput(editRecord.taxCents, editRecord.currency ?? "USD"));
-    setTip(centsInput(editRecord.tipCents, editRecord.currency ?? "USD"));
+    setOriginalReceiptTotalCents(editRecord.originalReceiptTotalCents ?? null);
+    setTaxMode("amount");
+    setTipMode("amount");
+    setTaxRate("");
+    setTipRate("");
+    setTipBasis("pre_tax_subtotal");
+    setIncludeTax(editRecord.includeTax ?? true);
+    setIncludeTip(editRecord.includeTip ?? true);
+    setTaxKnown(editRecord.taxAmountKnown ?? true);
+    setTipKnown(editRecord.tipAmountKnown ?? true);
+    setTaxConfirmed(true);
+    setTipConfirmed(true);
+    setPercentageConfirmed(true);
+    setTax(editRecord.taxAmountKnown === false ? "" : centsInput(editRecord.taxCents, editRecord.currency ?? "USD"));
+    setTip(editRecord.tipAmountKnown === false ? "" : centsInput(editRecord.tipCents, editRecord.currency ?? "USD"));
     setItems(editRecord.items.map((item) => ({
       id: item.id,
       name: item.name,
@@ -77,10 +110,23 @@ export function ExpenseForm({ groupId, expenseId, receiptId, offline = false }: 
     if (!pending) return;
     setReceiptTransfer(pending);
     setCurrency(pending.receipt.currency ?? "USD");
+    setOriginalReceiptTotalCents(parseMoneyToMinorUnits(String(pending.receipt.total), pending.receipt.currency ?? "USD"));
+    setIncludeTax(pending.includeTax);
+    setIncludeTip(pending.includeTip);
+    setTaxKnown(pending.taxConfirmed);
+    setTipKnown(pending.tipConfirmed);
+    setTaxConfirmed(pending.taxConfirmed);
+    setTipConfirmed(pending.tipConfirmed);
+    setTaxMode(pending.receipt.taxInferred && pending.receipt.taxPercentage !== null && pending.receipt.taxPercentage !== undefined ? "percentage" : "amount");
+    setTipMode(pending.receipt.tipInferred && pending.receipt.tipPercentage !== null && pending.receipt.tipPercentage !== undefined ? "percentage" : "amount");
+    setTaxRate(pending.receipt.taxPercentage === null || pending.receipt.taxPercentage === undefined ? "" : String(pending.receipt.taxPercentage));
+    setTipRate(pending.receipt.tipPercentage === null || pending.receipt.tipPercentage === undefined ? "" : String(pending.receipt.tipPercentage));
+    setTipBasis(pending.receipt.tipBasis === "post_tax_subtotal" ? "post_tax_subtotal" : "pre_tax_subtotal");
+    setPercentageConfirmed(!pending.receipt.taxInferred && !pending.receipt.tipInferred);
     setDescription(pending.receipt.merchant);
     const transferCurrency = pending.receipt.currency ?? "USD";
-    setTax(centsInput(parseMoneyToMinorUnits(String(pending.receipt.tax), transferCurrency) ?? 0, transferCurrency));
-    setTip(centsInput(parseMoneyToMinorUnits(String(pending.receipt.tip), transferCurrency) ?? 0, transferCurrency));
+    setTax(Number.isFinite(pending.receipt.tax) ? centsInput(parseMoneyToMinorUnits(String(pending.receipt.tax), transferCurrency) ?? 0, transferCurrency) : "");
+    setTip(Number.isFinite(pending.receipt.tip) ? centsInput(parseMoneyToMinorUnits(String(pending.receipt.tip), transferCurrency) ?? 0, transferCurrency) : "");
     setItems(pending.receipt.items.map((item) => ({
       id: receiptItemId(groupId, pending.receipt.id, item.id),
       name: item.name,
@@ -100,19 +146,55 @@ export function ExpenseForm({ groupId, expenseId, receiptId, offline = false }: 
     quantity: Number(item.quantity),
   })), [items]);
   const subtotalCents = parsedItems.reduce((sum, item) => sum + (item.price ?? 0) * (Number.isInteger(item.quantity) ? item.quantity : 0), 0);
-  const taxCents = moneyValue(tax, currency);
-  const tipCents = moneyValue(tip, currency);
-  const receiptTotalCents = receiptTransfer ? parseMoneyToMinorUnits(String(receiptTransfer.receipt.total), currency) : null;
+  const parsedTaxRate = parsePercentageToPpm(taxRate);
+  const parsedTipRate = parsePercentageToPpm(tipRate);
+  const rawTaxCents = taxMode === "percentage"
+    ? percentageValue(subtotalCents, parsedTaxRate)
+    : moneyValue(tax, currency);
+  const effectiveTaxCents = includeTax ? rawTaxCents : 0;
+  const tipBaseCents = tipBasis === "post_tax_subtotal" ? subtotalCents + (effectiveTaxCents ?? 0) : subtotalCents;
+  const rawTipCents = tipMode === "percentage"
+    ? percentageValue(tipBaseCents, parsedTipRate)
+    : moneyValue(tip, currency);
+  const effectiveTipCents = includeTip ? rawTipCents : 0;
+  const splitTotalCents = (includeTax && rawTaxCents === null) || (includeTip && rawTipCents === null) ? null : subtotalCents + (effectiveTaxCents ?? 0) + (effectiveTipCents ?? 0);
+  const receiptTotalCents = originalReceiptTotalCents;
   const memberIds = saved?.members.map((member) => member.id) ?? [];
   const unassignedItems = getUnassignedItems(items, memberIds);
   const unassignedItemIds = new Set(unassignedItems.map((item) => item.id));
+  const percentageEntryActive = taxMode === "percentage" || tipMode === "percentage";
+
+  function setEntryMode(kind: "tax" | "tip", nextMode: EntryMode) {
+    const currentAmount = kind === "tax" ? rawTaxCents : rawTipCents;
+    const base = kind === "tax" ? subtotalCents : tipBaseCents;
+    if (nextMode === "percentage") {
+      const derived = currentAmount !== null ? percentageFromMinorUnits(currentAmount, base) : null;
+      if (kind === "tax") { setTaxMode(nextMode); setTaxRate(derived === null ? "" : formatPercentagePpm(derived)); }
+      else { setTipMode(nextMode); setTipRate(derived === null ? "" : formatPercentagePpm(derived)); }
+      setPercentageConfirmed(false);
+    } else {
+      if (kind === "tax") { setTaxMode(nextMode); setTax(centsInput(currentAmount ?? 0, currency)); }
+      else { setTipMode(nextMode); setTip(centsInput(currentAmount ?? 0, currency)); }
+      setPercentageConfirmed(true);
+    }
+  }
+
+  function chooseTipRate(rate: number | null) {
+    setIncludeTip(true);
+    setTipKnown(true);
+    setTipConfirmed(true);
+    setTipMode("percentage");
+    setTipRate(rate === null ? "" : String(rate));
+    setPercentageConfirmed(false);
+  }
   const preview = useMemo(() => {
-    if (!saved || !description.trim() || parsedItems.some(({ draft, price, quantity }) => !draft.name.trim() || price === null || price < 0 || !Number.isInteger(quantity) || quantity < 1 || draft.assignedMemberIds.length === 0) || taxCents === null || tipCents === null) return null;
-    const draft: ExpenseRecord = { id: "preview", groupId, description, paidByMemberId: paidByMemberId || saved.members[0]?.id || "", items: parsedItems.map(({ draft: item, price, quantity }) => ({ id: item.id, name: item.name.trim(), quantity, unitPriceCents: price!, assignedMemberIds: item.assignedMemberIds, memberSharesCents: item.memberSharesCents })), taxCents, tipCents, currency, createdAt: "" };
+    if (!saved || !description.trim() || parsedItems.some(({ draft, price, quantity }) => !draft.name.trim() || price === null || price < 0 || !Number.isInteger(quantity) || quantity < 1 || draft.assignedMemberIds.length === 0) || (includeTax && (!taxKnown || rawTaxCents === null)) || (includeTip && (!tipKnown || rawTipCents === null))) return null;
+    const draft: ExpenseRecord = { id: "preview", groupId, description, paidByMemberId: paidByMemberId || saved.members[0]?.id || "", items: parsedItems.map(({ draft: item, price, quantity }) => ({ id: item.id, name: item.name.trim(), quantity, unitPriceCents: price!, assignedMemberIds: item.assignedMemberIds, memberSharesCents: item.memberSharesCents })), taxCents: effectiveTaxCents ?? 0, tipCents: effectiveTipCents ?? 0, currency, includeTax, includeTip, createdAt: "" };
     try { return calculateExpenseShares(draft, saved.members.map((member) => member.id)); } catch { return null; }
-  }, [currency, description, groupId, paidByMemberId, parsedItems, saved, taxCents, tipCents]);
+  }, [currency, description, effectiveTaxCents, effectiveTipCents, groupId, paidByMemberId, parsedItems, rawTaxCents, rawTipCents, saved]);
 
   function updateItem(itemId: string, update: Partial<DraftItem>) {
+    if (taxMode === "percentage" || tipMode === "percentage") setPercentageConfirmed(false);
     setItems((current) => current.map((item) => {
       if (item.id !== itemId) return item;
       const updated = { ...item, ...update };
@@ -148,7 +230,7 @@ export function ExpenseForm({ groupId, expenseId, receiptId, offline = false }: 
       if (receiptTransfer) clearReceiptTransfer(receiptTransfer.transferId);
       router.push(`/groups/${encodeURIComponent(groupId)}/settlement`);
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Expense could not be saved.");
+      setError(isLegacyCloudSchemaCurrencyError(cause) ? t("expense.currencyPersistenceUnavailable") : cause instanceof Error ? cause.message : "Expense could not be saved.");
       if (target === "cloud") setPendingOfflineExpense(expense);
     } finally { setSaving(false); }
   }
@@ -166,16 +248,21 @@ export function ExpenseForm({ groupId, expenseId, receiptId, offline = false }: 
       scrollToFirstUnassignedItem();
       return;
     }
-    if (taxCents === null || tipCents === null) return setError(`Enter tax and tip as ${currency} amounts with the correct decimal precision.`);
-    if (receiptTotalCents !== null && subtotalCents + taxCents + tipCents !== receiptTotalCents) return setError(t("expense.receiptTotalMismatch"));
-    if (taxCents + tipCents > 0 && subtotalCents === 0) return setError("Add an item with a price before adding tax or tip.");
-    if (!Number.isSafeInteger(subtotalCents + taxCents + tipCents)) return setError("This expense total is too large to calculate safely.");
+    if ((includeTax && (!taxKnown || rawTaxCents === null)) || (includeTip && (!tipKnown || rawTipCents === null))) return setError(`Enter tax and tip as ${currency} amounts with the correct decimal precision, or exclude the missing charge.`);
+    if (percentageEntryActive && !percentageConfirmed) return setError(t("expense.confirmCalculated"));
+    if (receiptTransfer && includeTax && includeTip && receiptTotalCents !== null && splitTotalCents !== receiptTotalCents) return setError(t("expense.receiptTotalMismatch"));
+    if (receiptTransfer && includeTax && !taxConfirmed && !percentageConfirmed) return setError(t("expense.confirmCharges"));
+    if (receiptTransfer && includeTip && !tipConfirmed && !percentageConfirmed) return setError(t("expense.confirmCharges"));
+    if ((effectiveTaxCents ?? 0) + (effectiveTipCents ?? 0) > 0 && subtotalCents === 0) return setError("Add an item with a price before adding tax or tip.");
+    if (!Number.isSafeInteger(splitTotalCents)) return setError("This expense total is too large to calculate safely.");
     if (normalized.some(({ price, quantity }) => !Number.isSafeInteger(price! * quantity))) return setError("An item total is too large to calculate safely.");
 
     const expense: ExpenseRecord = {
       id: expenseId ?? receiptTransfer?.expenseId ?? crypto.randomUUID(), groupId, description: description.trim(), paidByMemberId,
       items: normalized.map(({ draft, price, quantity }) => ({ id: draft.id.startsWith("new-item") ? crypto.randomUUID() : draft.id, name: draft.name.trim(), quantity, unitPriceCents: price!, assignedMemberIds: draft.assignedMemberIds, memberSharesCents: draft.memberSharesCents })),
-      taxCents, tipCents, currency, createdAt: editRecord?.createdAt ?? new Date().toISOString(),
+      taxCents: rawTaxCents ?? 0, tipCents: rawTipCents ?? 0, taxAmountKnown: taxKnown && rawTaxCents !== null, tipAmountKnown: tipKnown && rawTipCents !== null, currency, includeTax, includeTip,
+      originalReceiptTotalCents: receiptTotalCents ?? undefined,
+      createdAt: editRecord?.createdAt ?? new Date().toISOString(),
     };
     const target: ExpenseStorageMode = expenseStore.signedIn ? (offline ? "offline" : "cloud") : "guest";
     await persist(expense, target);
@@ -202,6 +289,7 @@ export function ExpenseForm({ groupId, expenseId, receiptId, offline = false }: 
           <div className="sm:col-span-2"><label htmlFor="expense-description" className="brand-label mb-1.5 block">Merchant or expense name</label><Input id="expense-description" required maxLength={80} value={description} onChange={(event) => setDescription(event.target.value)} placeholder="e.g. Dinner at Sunroom" autoComplete="off" /></div>
           <div><label htmlFor="paid-by" className="brand-label mb-1.5 block">Paid by</label><select id="paid-by" value={paidByMemberId} onChange={(event) => setPaidByMemberId(event.target.value)} className="brand-input h-11 text-sm">{saved.members.map((member) => <option key={member.id} value={member.id}>{member.name}</option>)}</select></div>
           <div><label htmlFor="expense-currency" className="brand-label mb-1.5 block">Original currency</label><select id="expense-currency" value={currency} onChange={(event) => setCurrency(event.target.value as CurrencyCode)} className="brand-input h-11 text-sm">{CURRENCY_CODES.map((code) => <option key={code} value={code}>{CURRENCY_LABELS[code]}</option>)}</select></div>
+          {expenseStore.signedIn && !offline && <p role="status" className="sm:col-span-2 rounded-xl border border-[#eadbb7] bg-[#fffaf0] px-3.5 py-3 text-xs leading-5 text-[#75511e]">{t("expense.legacySchemaNote")}</p>}
           <div className="flex items-end sm:col-span-2"><p className="text-xs leading-5 text-muted">The payer covers the full receipt upfront. Splitting and settlement stay in the original currency; converted amounts are display-only.</p></div>
         </div>
       </Card>
@@ -236,13 +324,31 @@ export function ExpenseForm({ groupId, expenseId, receiptId, offline = false }: 
       <Card className="p-5 sm:p-6">
         <div className="flex items-center gap-2"><CircleDollarSign size={18} className="text-primary" aria-hidden="true" /><h3 className="text-base font-semibold">Tax and tip</h3></div>
         <p className="mt-1 text-xs leading-5 text-muted">Shared in proportion to each person’s item subtotal.</p>
-        <div className="mt-4 grid grid-cols-2 gap-3"><div><label className="mb-1.5 block text-xs font-semibold text-muted" htmlFor="expense-tax">Tax · {currency}</label><Input id="expense-tax" inputMode="decimal" value={tax} onChange={(event) => setTax(event.target.value)} placeholder={CURRENCY_DECIMALS[currency] === 0 ? "0" : "0.00"} /></div><div><label className="mb-1.5 block text-xs font-semibold text-muted" htmlFor="expense-tip">Tip · {currency}</label><Input id="expense-tip" inputMode="decimal" value={tip} onChange={(event) => setTip(event.target.value)} placeholder={CURRENCY_DECIMALS[currency] === 0 ? "0" : "0.00"} /></div></div>
+        <div className="mt-4 grid gap-4">
+          <div>
+            <div className="flex items-center justify-between gap-2"><label className="text-xs font-semibold text-muted" htmlFor="expense-tax">Tax · {currency}</label><div className="flex rounded-full border border-border bg-white p-0.5" role="group" aria-label={t("expense.taxRate")}><button type="button" onClick={() => setEntryMode("tax", "amount")} aria-pressed={taxMode === "amount"} className={`rounded-full px-2.5 py-1 text-[11px] font-bold ${taxMode === "amount" ? "bg-[#ed795d] text-white" : "text-muted"}`}>{t("expense.amount")}</button><button type="button" onClick={() => setEntryMode("tax", "percentage")} aria-pressed={taxMode === "percentage"} className={`rounded-full px-2.5 py-1 text-[11px] font-bold ${taxMode === "percentage" ? "bg-[#ed795d] text-white" : "text-muted"}`}>{t("expense.percent")}</button></div></div>
+            {taxMode === "amount" ? <Input id="expense-tax" inputMode="decimal" value={tax} onChange={(event) => { setTax(event.target.value); setTaxKnown(true); setTaxConfirmed(true); setPercentageConfirmed(true); }} placeholder={CURRENCY_DECIMALS[currency] === 0 ? "0" : "0.00"} /> : <Input id="expense-tax-rate" inputMode="decimal" value={taxRate} onChange={(event) => { setTaxRate(event.target.value); setTaxKnown(true); setTaxConfirmed(true); setPercentageConfirmed(false); }} placeholder="0.00%" aria-label={t("expense.taxRate")} />}
+            {taxMode === "percentage" && rawTaxCents !== null && <p className="mt-1 text-xs text-muted">{t("expense.calculatedAmount")}: {formatCents(rawTaxCents, currency)}</p>}
+            <label className="mt-3 flex cursor-pointer items-start gap-2 text-xs leading-5 text-muted"><input type="checkbox" checked={includeTax} onChange={(event) => setIncludeTax(event.target.checked)} className="mt-0.5 accent-[#ed795d]" />{t("expense.includeTax")}</label>
+          </div>
+          <div>
+            <div className="flex items-center justify-between gap-2"><label className="text-xs font-semibold text-muted" htmlFor="expense-tip">Tip · {currency}</label><div className="flex rounded-full border border-border bg-white p-0.5" role="group" aria-label={t("expense.tipRate")}><button type="button" onClick={() => setEntryMode("tip", "amount")} aria-pressed={tipMode === "amount"} className={`rounded-full px-2.5 py-1 text-[11px] font-bold ${tipMode === "amount" ? "bg-[#ed795d] text-white" : "text-muted"}`}>{t("expense.amount")}</button><button type="button" onClick={() => setEntryMode("tip", "percentage")} aria-pressed={tipMode === "percentage"} className={`rounded-full px-2.5 py-1 text-[11px] font-bold ${tipMode === "percentage" ? "bg-[#ed795d] text-white" : "text-muted"}`}>{t("expense.percent")}</button></div></div>
+            {tipMode === "amount" ? <Input id="expense-tip" inputMode="decimal" value={tip} onChange={(event) => { setTip(event.target.value); setTipKnown(true); setTipConfirmed(true); setPercentageConfirmed(true); }} placeholder={CURRENCY_DECIMALS[currency] === 0 ? "0" : "0.00"} /> : <Input id="expense-tip-rate" inputMode="decimal" value={tipRate} onChange={(event) => { setTipRate(event.target.value); setTipKnown(true); setTipConfirmed(true); setPercentageConfirmed(false); }} placeholder="0.00%" aria-label={t("expense.tipRate")} />}
+            {tipMode === "percentage" && rawTipCents !== null && <p className="mt-1 text-xs text-muted">{t("expense.calculatedAmount")}: {formatCents(rawTipCents, currency)}</p>}
+            <label className="mt-3 flex cursor-pointer items-start gap-2 text-xs leading-5 text-muted"><input type="checkbox" checked={includeTip} onChange={(event) => setIncludeTip(event.target.checked)} className="mt-0.5 accent-[#ed795d]" />{t("expense.includeTip")}</label>
+            <fieldset className="mt-3"><legend className="mb-2 text-xs font-semibold text-muted">{t("expense.tipOptions")}</legend><div className="flex flex-wrap gap-2">{[15, 18, 20, 25].map((rate) => <button key={rate} type="button" onClick={() => chooseTipRate(rate)} aria-pressed={tipMode === "percentage" && tipRate === String(rate)} className={`min-h-9 rounded-full border px-3 text-xs font-bold transition ${tipMode === "percentage" && tipRate === String(rate) ? "border-[#ed795d] bg-[#fff0eb] text-[#a45c4b]" : "border-border bg-white text-muted hover:border-[#ed795d]"}`}>{rate}%</button>)}<button type="button" onClick={() => chooseTipRate(null)} aria-pressed={tipMode === "percentage" && tipRate === ""} className="min-h-9 rounded-full border border-border bg-white px-3 text-xs font-bold text-muted hover:border-[#ed795d]">{t("expense.customTip")}</button></div></fieldset>
+            <label className="mt-3 block text-xs font-semibold text-muted" htmlFor="expense-tip-basis">{t("expense.tipBasis")}</label><select id="expense-tip-basis" value={tipBasis} onChange={(event) => { setTipBasis(event.target.value as TipBasis); if (tipMode === "percentage") setPercentageConfirmed(false); }} className="brand-input mt-1 h-10 w-full text-sm"><option value="pre_tax_subtotal">{t("expense.preTaxSubtotal")}</option><option value="post_tax_subtotal">{t("expense.postTaxSubtotal")}</option></select>
+          </div>
+        </div>
+        {(percentageEntryActive || (receiptTransfer && ((includeTax && !taxConfirmed) || (includeTip && !tipConfirmed)))) && <label className="mt-4 flex cursor-pointer items-start gap-2 rounded-xl border border-[#e6c66f] bg-[#fffaf0] p-3 text-xs leading-5 text-[#77684d]"><input type="checkbox" checked={percentageConfirmed} onChange={(event) => setPercentageConfirmed(event.target.checked)} className="mt-0.5 accent-[#ed795d]" />{percentageEntryActive ? t("expense.confirmCalculated") : t("expense.confirmCharges")}</label>}
         <div className="mt-5 rounded-xl bg-[#f7f9f6] p-4 text-sm">
           <div className="flex justify-between text-muted"><span>Items subtotal</span><span>{formatCents(subtotalCents, currency)}</span></div>
-          <div className="mt-2 flex justify-between text-muted"><span>Tax</span><span>{formatCents(taxCents ?? 0, currency)}</span></div>
-          <div className="mt-2 flex justify-between text-muted"><span>Tip</span><span>{formatCents(tipCents ?? 0, currency)}</span></div>
+          <div className="mt-2 flex justify-between text-muted"><span>Tax</span><span>{formatCents(effectiveTaxCents ?? 0, currency)}</span></div>
+          <div className="mt-2 flex justify-between text-muted"><span>Tip</span><span>{formatCents(effectiveTipCents ?? 0, currency)}</span></div>
           <div className="my-3 border-t border-border" />
-          <div className="flex items-baseline justify-between"><span className="font-semibold">Receipt total</span><strong className="text-xl font-semibold tracking-[-0.04em]">{formatCents(subtotalCents + (taxCents ?? 0) + (tipCents ?? 0), currency)}</strong></div>
+          <div className="flex items-baseline justify-between"><span className="font-semibold">{t("expense.splitTotal")}</span><strong className="text-xl font-semibold tracking-[-0.04em]">{formatCents(splitTotalCents ?? 0, currency)}</strong></div>
+          {receiptTotalCents !== null && <div className="mt-2 flex justify-between text-xs text-muted"><span>{t("expense.originalReceiptTotal")}</span><span>{formatCents(receiptTotalCents, currency)}</span></div>}
+          {receiptTransfer && (!includeTax || !includeTip) && <p className="mt-3 text-xs leading-5 text-muted">{t("expense.excludedChargesNote")}</p>}
           {preview ? <div className="mt-4 border-t border-border pt-3"><p className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted">Each person’s share</p>{saved.members.map((member) => <div key={member.id} className="flex justify-between py-1 text-sm"><span>{member.name}</span><span className="font-semibold">{formatCents(preview.get(member.id) ?? 0, currency)}</span></div>)}</div> : <p className="mt-3 text-xs leading-5 text-muted">Select people for each item to see the per-person split.</p>}
         </div>
       </Card>

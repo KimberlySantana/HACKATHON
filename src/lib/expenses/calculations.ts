@@ -35,6 +35,13 @@ export function expenseCurrency(expense: ExpenseRecord): CurrencyCode {
   return expense.currency ?? "USD";
 }
 
+export function expenseChargeCents(expense: ExpenseRecord) {
+  return {
+    taxCents: expense.includeTax === false || expense.taxAmountKnown === false ? 0 : expense.taxCents,
+    tipCents: expense.includeTip === false || expense.tipAmountKnown === false ? 0 : expense.tipCents,
+  };
+}
+
 function splitEvenly(amountCents: number, memberIds: string[]) {
   const share = Math.floor(amountCents / memberIds.length);
   let remainder = amountCents % memberIds.length;
@@ -121,8 +128,9 @@ export function calculateExpenseShares(expense: ExpenseRecord, memberIds: string
     }
   }
 
-  const tax = allocateProportionally(expense.taxCents, itemSubtotals, orderedIds);
-  const tip = allocateProportionally(expense.tipCents, itemSubtotals, orderedIds);
+  const charges = expenseChargeCents(expense);
+  const tax = allocateProportionally(charges.taxCents, itemSubtotals, orderedIds);
+  const tip = allocateProportionally(charges.tipCents, itemSubtotals, orderedIds);
   const shares = new Map(orderedIds.map((id) => [id, (itemSubtotals.get(id) ?? 0) + (tax.get(id) ?? 0) + (tip.get(id) ?? 0)]));
   return shares;
 }
@@ -135,7 +143,8 @@ export function calculateSettlement(expenses: ExpenseRecord[], members: Settleme
   const balances = new Map(memberIds.map((id) => [id, 0]));
   for (const expense of expenses) {
     const shares = calculateExpenseShares(expense, memberIds);
-    const totalCents = getExpenseSubtotalCents(expense) + expense.taxCents + expense.tipCents;
+    const charges = expenseChargeCents(expense);
+    const totalCents = getExpenseSubtotalCents(expense) + charges.taxCents + charges.tipCents;
     if (!Number.isSafeInteger(totalCents)) throw new Error("Expense total exceeds the supported range.");
     if (!balances.has(expense.paidByMemberId)) throw new Error("Expense payer is not in this group.");
     balances.set(expense.paidByMemberId, (balances.get(expense.paidByMemberId) ?? 0) + totalCents);

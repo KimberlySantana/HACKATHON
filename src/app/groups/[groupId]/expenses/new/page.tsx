@@ -14,5 +14,5 @@ async function NewExpenseContent({ params, searchParams }: { params: Promise<{ g
   const { groupId } = await params;
   const query = searchParams ? await searchParams : {};
   const fromReceipt = Array.isArray(query.fromReceipt) ? query.fromReceipt[0] : query.fromReceipt;
-  return <><Link href={`/groups/${encodeURIComponent(groupId)}`} className="mb-4 inline-flex min-h-9 items-center gap-1.5 text-sm font-medium text-muted hover:text-primary"><ChevronLeft size={16} aria-hidden="true" />Back to group</Link><ExpenseForm groupId={groupId} receiptId={fromReceipt} /></>;
+  return <><Link href={`/groups/${encodeURIComponent(groupId)}`} className="brand-back-link mb-4"><ChevronLeft size={16} aria-hidden="true" />Back to group</Link><ExpenseForm groupId={groupId} receiptId={fromReceipt} /></>;
 }

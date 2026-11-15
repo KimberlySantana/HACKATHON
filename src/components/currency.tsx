@@ -67,14 +67,14 @@ export function CurrencySwitcher() {
   const { displayCurrency, conversionsEnabled, hydrated, suggestedCurrency, setDisplayCurrency, setConversionsEnabled } = useCurrency();
   const { t } = useLanguage();
   return <div className="flex flex-wrap items-center gap-2">
-    <label className="group inline-flex min-h-10 items-center gap-2 rounded-full border border-[#ead8ce] bg-[#fff8f4] px-3 shadow-[0_8px_20px_rgba(177,104,78,0.08)] transition hover:-translate-y-0.5 hover:border-[#ed795d] hover:bg-white focus-within:ring-4 focus-within:ring-[#ed795d]/10">
+    <label className="group inline-flex min-h-10 items-center gap-2 rounded-xl border border-border bg-white px-3 shadow-[0_4px_12px_rgba(31,50,77,0.04)] transition hover:border-[#b8c9dc] hover:bg-[#f8fbfd] focus-within:ring-4 focus-within:ring-ring/10">
       <span aria-hidden="true">💱</span><span className="sr-only">{t("currency.select")}</span>
       <select value={displayCurrency ?? "original"} onChange={(event) => setDisplayCurrency(event.target.value === "original" ? null : event.target.value as CurrencyCode)} disabled={!hydrated} aria-label={t("currency.select")} className="max-w-[9rem] cursor-pointer appearance-none bg-transparent py-2 pr-1 text-xs font-extrabold text-[#8b5f52] outline-none disabled:cursor-wait disabled:opacity-60">
         <option value="original">{t("currency.original")}</option>
         {CURRENCY_CODES.map((code) => <option key={code} value={code}>{CURRENCY_LABELS[code]}{code === suggestedCurrency ? ` · ${t("currency.suggestion")}` : ""}</option>)}
-      </select><span className="text-[10px] text-[#ed795d]" aria-hidden="true">⌄</span>
+      </select><span className="text-[10px] text-accent" aria-hidden="true">⌄</span>
     </label>
-    <label className="inline-flex min-h-10 items-center gap-2 rounded-full border border-[#ead8ce] bg-white/80 px-3 text-xs font-extrabold text-[#8b5f52]">
+    <label className="inline-flex min-h-10 items-center gap-2 rounded-xl border border-border bg-white px-3 text-xs font-bold text-primary shadow-[0_4px_12px_rgba(31,50,77,0.04)]">
       <input type="checkbox" checked={conversionsEnabled} onChange={(event) => setConversionsEnabled(event.target.checked)} disabled={!hydrated} className="accent-[#ed795d] disabled:cursor-wait" />
       {t("currency.conversions")}
     </label>

@@ -11,6 +11,10 @@ export const mockReceipt: Receipt = {
   tip: 5.04,
   total: 50.4,
   currency: "USD",
+  suggestedTipPercentages: [15, 18, 20, 25],
+  taxStatus: "amount_printed",
+  taxBasis: "subtotal",
+  tipBasis: "pre_tax_subtotal",
   items: [
     { id: "item-1", name: "Avocado toast", quantity: 1, unitPrice: 14, total: 14, assignedMemberIds: ["member-maya"] },
     { id: "item-2", name: "Sunday pasta", quantity: 1, unitPrice: 22, total: 22, assignedMemberIds: ["member-jules"] },

@@ -11,6 +11,9 @@ export type PendingReceiptTransfer = {
   groupId: string;
   receipt: Receipt;
   reviewFlags: ReceiptReview;
+  includeTax: boolean;
+  includeTip: boolean;
+  taxConfirmed: boolean;
   tipConfirmed: boolean;
   reviewAcknowledged: boolean;
   expenseId: string;
@@ -28,8 +31,7 @@ export function createReceiptTransfer(
   groupId: string,
   receipt: Receipt,
   reviewFlags: ReceiptReview,
-  tipConfirmed: boolean,
-  reviewAcknowledged: boolean,
+  options: { includeTax: boolean; includeTip: boolean; taxConfirmed: boolean; tipConfirmed: boolean; reviewAcknowledged: boolean },
 ): PendingReceiptTransfer {
   return {
     version: 1,
@@ -37,8 +39,7 @@ export function createReceiptTransfer(
     groupId,
     receipt,
     reviewFlags,
-    tipConfirmed,
-    reviewAcknowledged,
+    ...options,
     expenseId: receiptExpenseId(groupId, receipt.id),
   };
 }
@@ -79,8 +80,16 @@ export function readReceiptTransfer(groupId: string, receiptId?: string) {
     const transfer = value as Partial<PendingReceiptTransfer>;
     if (transfer.version !== 1 || transfer.groupId !== groupId || (receiptId && transfer.receipt?.id !== receiptId) ||
       typeof transfer.transferId !== "string" || typeof transfer.expenseId !== "string" || !isReceipt(transfer.receipt) ||
-      !isReview(transfer.reviewFlags) || typeof transfer.tipConfirmed !== "boolean" || typeof transfer.reviewAcknowledged !== "boolean") return null;
-    return transfer as PendingReceiptTransfer;
+      !isReview(transfer.reviewFlags) || (transfer.includeTax !== undefined && typeof transfer.includeTax !== "boolean") ||
+      (transfer.includeTip !== undefined && typeof transfer.includeTip !== "boolean") ||
+      (transfer.taxConfirmed !== undefined && typeof transfer.taxConfirmed !== "boolean") ||
+      typeof transfer.tipConfirmed !== "boolean" || typeof transfer.reviewAcknowledged !== "boolean") return null;
+    return {
+      ...transfer,
+      includeTax: transfer.includeTax ?? true,
+      includeTip: transfer.includeTip ?? true,
+      taxConfirmed: transfer.taxConfirmed ?? true,
+    } as PendingReceiptTransfer;
   } catch {
     return null;
   }
