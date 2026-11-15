@@ -4,11 +4,11 @@ Splitzy helps friends, roommates, and travelers track shared costs, review item 
 
 ## What works
 
-- **Sign-in:** Supabase email magic links. Guest mode remains available for local groups and expenses.
+- **Guest mode:** No sign-in or cloud credentials are needed. Groups and expenses save in the current browser with localStorage. Supabase email sign-in is optional when the project is configured.
 - **Groups:** Create groups and manage members. Signed-in groups are stored in Supabase; guest groups stay in this browser.
 - **Expenses:** Add, edit, and delete itemized expenses. Item notes, per-item member assignments, tax, and tip are retained in cloud or guest storage.
 - **Settlement:** Review balances and suggested transfers, copy a summary, compose editable payment reminders, and download a PDF report based on saved expenses.
-- **Receipt scanning:** Unavailable in the MVP release. The production UI points users to manual expenses and the paid API returns `503 SCANNER_DISABLED` before reading uploads or contacting OpenAI.
+- **Receipt demo:** `/scan` previews an image locally and can show a clearly labeled sample receipt. It does not extract text or send the image anywhere. Paid AI scanning remains disabled; the API returns `503 SCANNER_DISABLED` before reading uploads or contacting OpenAI.
 
 Splitzy suggests transfers; it does not send payments or claim they are complete. Cloud records are owner-scoped through Supabase RLS. Guest data stays on the current browser.
 
@@ -22,22 +22,20 @@ Requires Node.js 20.9 or newer and npm.
    npm install
    ```
 
-2. Copy `.env.example` to `.env.local`.
-3. Set `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` from the Supabase project. Keep `ENABLE_RECEIPT_SCANNING=false`. No OpenAI key is needed for this release. `.env.local` is ignored by Git.
-4. Review and apply the five group and expense SQL migrations in `supabase/migrations/` in timestamp order to the intended Supabase project before deployment. Do not apply the separate `20261115032804_receipt_scan_usage_limits.sql` for this MVP; it is needed only when scanner activation is approved. No migration is applied automatically.
-5. Start the app:
+2. For the guest demo, skip environment setup. To enable optional cloud sign-in and sync, copy `.env.example` to `.env.local` and set `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` from your Supabase project. Keep `ENABLE_RECEIPT_SCANNING=false`. No OpenAI key is needed. `.env.local` is ignored by Git.
+3. Start the app:
 
    ```bash
    npm run dev
    ```
 
-6. Open [http://localhost:3000](http://localhost:3000), sign in, create a group, add members, and add an expense manually. Assign each item and save, then open Settlement.
+4. Open [http://localhost:3000](http://localhost:3000), create a group without signing in, add members, and add an expense manually. Assign each item and save, then open Settlement to copy payment requests or download a PDF. Use Receipt demo for a local photo preview and sample data.
 
 Press `Ctrl+C` in the terminal to stop the server.
 
 ## Scanner safety and limits
 
-The paid scan route requires the server-only `ENABLE_RECEIPT_SCANNING=true` flag. With the release value `false` or an unset value, it returns `503 SCANNER_DISABLED` before reading a request body, verifying a user, reserving quota, or calling OpenAI. The release UI does not expose scanning. Do not enable the flag until a real authenticated scan, quota migration, OpenAI configuration, and spend limits are verified in a later release.
+The paid scan route requires the server-only `ENABLE_RECEIPT_SCANNING=true` flag. With the release value `false` or an unset value, it returns `503 SCANNER_DISABLED` before reading a request body, verifying a user, reserving quota, or calling OpenAI. The `/scan` demo page only previews an image in the browser and displays static sample data. Do not enable the paid route until its authenticated flow, quota migration, OpenAI configuration, and spend limits are verified.
 
 The quota migration remains a prerequisite for any future scanner release. The existing auth, group ownership, RLS, and quota code remains in place behind the flag.
 
@@ -55,7 +53,7 @@ npm run build
 
 ## Deploying to Vercel
 
-For the MVP, set these Vercel Production environment variables: `NEXT_PUBLIC_SUPABASE_URL` to the intended Supabase project URL, `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` to its publishable key, and `ENABLE_RECEIPT_SCANNING=false`. Do not set `OPENAI_API_KEY` or `OPENAI_RECEIPT_MODEL` for this release. Apply only the reviewed group and expense migrations to that same Supabase project. Configure Supabase Auth Site URL and redirect allow-list for the Vercel HTTPS domain. After both developers review and merge the release PR, import this repository in Vercel (Next.js framework, repository root), confirm the production branch is `main`, enter the variables, and deploy. No production deployment or migration is performed by this preparation.
+Guest mode works on a Vercel Preview without environment variables. Optional cloud sync needs Supabase Preview variables and the reviewed group/expense schema; it is not required for the demo. Keep the Production branch set to `main` and do not deploy this demo branch to Production. A pull request to `main` lets Vercel create a Preview when the repository is connected.
 
 ## Git collaboration
 

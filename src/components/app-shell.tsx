@@ -1,15 +1,17 @@
 import type { ReactNode } from "react";
 import Link from "next/link";
-import { ArrowUpRight, Home, UsersRound } from "lucide-react";
+import { ArrowUpRight, Home, ScanLine, UsersRound } from "lucide-react";
 import { AuthPanel } from "@/components/groups/auth-panel";
+import { LanguageSwitcher } from "@/components/i18n";
 import { SplitzyMark } from "@/components/splitzy-mark";
 import { cn } from "@/lib/utils";
 
-type Destination = "overview" | "groups";
+type Destination = "overview" | "groups" | "scan";
 
 const navigation: Array<{ href: string; label: string; key: Destination; Icon: typeof Home }> = [
   { href: "/", label: "Overview", key: "overview", Icon: Home },
   { href: "/groups", label: "Groups", key: "groups", Icon: UsersRound },
+  { href: "/scan", label: "Receipt demo", key: "scan", Icon: ScanLine },
 ];
 
 export function AppShell({ title, description, active, children, action }: { title: string; description?: string; active: Destination; children: ReactNode; action?: ReactNode }) {
@@ -46,6 +48,7 @@ export function AppShell({ title, description, active, children, action }: { tit
             <div className="flex w-full flex-wrap items-center justify-between gap-3 sm:w-auto sm:justify-end">
               {action}
               <AuthPanel />
+              <LanguageSwitcher />
             </div>
           </div>
         </header>
@@ -54,7 +57,7 @@ export function AppShell({ title, description, active, children, action }: { tit
         </main>
       </div>
     </div>
-    <nav aria-label="Main navigation" className="fixed inset-x-0 bottom-0 z-40 grid grid-cols-2 border-t border-border bg-white/95 px-3 pt-2 pb-[calc(8px+env(safe-area-inset-bottom))] shadow-[0_-8px_24px_rgba(24,37,31,0.04)] backdrop-blur lg:hidden">
+    <nav aria-label="Main navigation" className="fixed inset-x-0 bottom-0 z-40 grid grid-cols-3 border-t border-border bg-white/95 px-3 pt-2 pb-[calc(8px+env(safe-area-inset-bottom))] shadow-[0_-8px_24px_rgba(24,37,31,0.04)] backdrop-blur lg:hidden">
       {navigation.map(({ href, label, key, Icon }) => <Link key={key} href={href} aria-current={active === key ? "page" : undefined} className={cn("flex min-h-14 flex-col items-center justify-center gap-1 rounded-xl text-[11px] font-semibold", active === key ? "text-primary" : "text-muted")}><Icon size={19} strokeWidth={1.8} aria-hidden="true" /><span>{label}</span></Link>)}
     </nav>
   </div>;

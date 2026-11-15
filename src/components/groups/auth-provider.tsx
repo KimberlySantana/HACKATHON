@@ -2,17 +2,24 @@
 
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import type { User } from "@supabase/supabase-js";
-import { createClient } from "@/lib/supabase/client";
+import { createClient, hasSupabaseConfig } from "@/lib/supabase/client";
 
-interface AuthState { user: User | null; loading: boolean; error: string | null; signIn: (email: string) => Promise<void>; signOut: () => Promise<void>; }
+interface AuthState { user: User | null; loading: boolean; error: string | null; cloudEnabled: boolean; signIn: (email: string) => Promise<void>; signOut: () => Promise<void>; }
 const AuthContext = createContext<AuthState | null>(null);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const supabase = useMemo(() => createClient(), []);
+  const cloudEnabled = hasSupabaseConfig();
+  const supabase = useMemo(() => cloudEnabled ? createClient() : null, [cloudEnabled]);
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
+    if (!supabase) {
+      setUser(null);
+      setError(null);
+      setLoading(false);
+      return;
+    }
     let active = true;
     void supabase.auth.getUser().then(({ data, error: authError }) => {
       if (!active) return;
@@ -33,13 +40,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return () => { active = false; subscription.unsubscribe(); };
   }, [supabase]);
   const value = useMemo<AuthState>(() => ({
-    user, loading, error,
+    user, loading, error, cloudEnabled,
     signIn: async (email) => {
+      if (!supabase) throw new Error("Cloud sign-in is not configured. You can keep using Splitzy in guest mode.");
       const { error } = await supabase.auth.signInWithOtp({ email, options: { emailRedirectTo: `${window.location.origin}/` } });
       if (error) throw error;
     },
-    signOut: async () => { const { error } = await supabase.auth.signOut(); if (error) throw error; },
-  }), [user, loading, error, supabase]);
+    signOut: async () => { if (!supabase) return; const { error } = await supabase.auth.signOut(); if (error) throw error; },
+  }), [user, loading, error, cloudEnabled, supabase]);
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
 

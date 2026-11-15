@@ -8,7 +8,7 @@ import { Input } from "@/components/ui/input";
 import { FormErrorToast } from "@/components/ui/form-error-toast";
 
 export function AuthPanel() {
-  const { user, loading, signIn, signOut, error: authError } = useAuth();
+  const { user, loading, signIn, signOut, error: authError, cloudEnabled } = useAuth();
   const [email, setEmail] = useState("");
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
@@ -45,6 +45,8 @@ export function AuthPanel() {
   }
 
   if (loading) return <span role="status" className="text-xs font-medium text-muted">Checking sign-in…</span>;
+
+  if (!cloudEnabled) return <span className="inline-flex min-h-10 items-center rounded-full bg-[#eaf1ec] px-3 text-xs font-semibold text-primary">Guest mode · saved on this device</span>;
 
   if (user) return <div className="flex min-w-0 flex-wrap items-center gap-2.5">
     <span className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-[#eaf1ec] text-primary"><CircleUserRound size={17} aria-hidden="true" /></span>
