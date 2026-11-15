@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { getUnassignedItems } from "./assignments.ts";
+import { assignEveryone, getUnassignedItems, toggleAssignedMember } from "./assignments.ts";
 
 test("finds items with no valid current group member assignment", () => {
   const items = [
@@ -19,4 +19,10 @@ test("does not assign members or mutate the item list", () => {
   getUnassignedItems(items, ["member-1"]);
 
   assert.deepEqual(items, before);
+});
+
+test("one-tap selection toggles one member and everyone selects the current group", () => {
+  assert.deepEqual(toggleAssignedMember(["a"], "b"), ["a", "b"]);
+  assert.deepEqual(toggleAssignedMember(["a", "b"], "a"), ["b"]);
+  assert.deepEqual(assignEveryone(["a", "b", "a"]), ["a", "b"]);
 });

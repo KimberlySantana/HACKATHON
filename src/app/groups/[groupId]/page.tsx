@@ -3,8 +3,10 @@ import { Suspense } from "react";
 import { GroupForm } from "@/components/groups/group-form";
 import { SplitzyMark } from "@/components/splitzy-mark";
 import { GroupExpenseOverview } from "@/components/expenses/group-expense-overview";
+import { GroupMembersPanel } from "@/components/groups/group-members-panel";
+import { groupExpenseHref } from "@/lib/groups/form";
 
-export default function GroupDetailPage({ params }: { params: Promise<{ groupId: string }> }) {
+export default function GroupDetailPage({ params, searchParams }: { params: Promise<{ groupId: string }>; searchParams: Promise<{ created?: string; updated?: string }> }) {
   return (
     <main className="min-h-screen bg-[#fbfaf7] text-[#25251f]">
       <header className="mx-auto flex w-full max-w-6xl items-center justify-between px-5 py-5 sm:px-8 sm:py-7">
@@ -17,14 +19,31 @@ export default function GroupDetailPage({ params }: { params: Promise<{ groupId:
       <div className="mx-auto max-w-2xl px-5 pb-16 pt-4 sm:px-8">
         <Link href="/groups" className="mb-5 inline-flex text-sm font-semibold text-[#d9674b] hover:text-[#bb4f36]">← All groups</Link>
         <Suspense fallback={<p role="status" className="rounded-2xl border border-[#ebe7de] bg-white p-5 text-sm text-[#77766d]">Loading group…</p>}>
-          <GroupDetail params={params} />
+          <GroupDetail params={params} searchParams={searchParams} />
         </Suspense>
       </div>
     </main>
   );
 }
 
-async function GroupDetail({ params }: { params: Promise<{ groupId: string }> }) {
-  const { groupId } = await params;
-  return <><div className="mb-5 flex flex-wrap gap-3"><Link href={`/groups/${encodeURIComponent(groupId)}/expenses/new`} className="inline-flex min-h-11 items-center justify-center rounded-xl bg-[#ed795d] px-4 text-sm font-bold text-white">+ Add expense</Link><Link href={`/groups/${encodeURIComponent(groupId)}/settlement`} className="inline-flex min-h-11 items-center justify-center rounded-xl bg-white px-4 text-sm font-bold text-[#625f56] ring-1 ring-[#ebe7de]">Settlement</Link></div><GroupExpenseOverview groupId={groupId} /><GroupForm groupId={groupId} /></>;
+async function GroupDetail({ params, searchParams }: { params: Promise<{ groupId: string }>; searchParams: Promise<{ created?: string; updated?: string }> }) {
+  const [{ groupId }, query] = await Promise.all([params, searchParams]);
+  const encodedId = encodeURIComponent(groupId);
+  return <div className="space-y-5">
+    {query.created === "1" && <p role="status" className="rounded-xl border border-[#cfe0d3] bg-[#f1f7f2] px-4 py-3 text-sm font-medium leading-5 text-primary">Group created. Add members when you’re ready, then record your first shared expense.</p>}
+    {query.updated === "1" && <p role="status" className="rounded-xl border border-[#cfe0d3] bg-[#f1f7f2] px-4 py-3 text-sm font-medium leading-5 text-primary">Group details saved.</p>}
+    <section aria-labelledby="first-expense-title" className="rounded-2xl border border-[#dce7de] bg-white p-5 sm:p-6">
+      <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-center">
+        <div><p className="text-xs font-semibold uppercase tracking-[0.1em] text-primary">NEXT STEP</p><h2 id="first-expense-title" className="mt-1 text-lg font-semibold">Start with a shared expense</h2><p className="mt-1 text-sm leading-5 text-muted">Add the people sharing this plan, then enter the items yourself and review the split before saving.</p></div>
+        <div className="flex flex-wrap gap-2">
+          <Link href={groupExpenseHref(groupId)} className="inline-flex min-h-11 items-center justify-center rounded-xl bg-primary px-4 text-sm font-semibold text-white hover:bg-primary-hover">Add manually</Link>
+        </div>
+      </div>
+      <p className="mt-3 rounded-xl bg-[#f7f6f1] px-3.5 py-2.5 text-xs leading-5 text-muted">Receipt scanning isn’t available yet. Add this expense manually; no receipt upload or AI extraction will occur.</p>
+    </section>
+    <GroupMembersPanel groupId={groupId} />
+    <div className="flex justify-end"><Link href={`/groups/${encodedId}/settlement`} className="inline-flex min-h-11 items-center justify-center rounded-xl border border-border bg-white px-4 text-sm font-semibold text-foreground hover:bg-surface-muted">View settlement</Link></div>
+    <GroupExpenseOverview groupId={groupId} />
+    <GroupForm groupId={groupId} />
+  </div>;
 }

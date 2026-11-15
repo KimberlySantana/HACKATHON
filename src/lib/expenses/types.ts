@@ -2,6 +2,8 @@
 export interface ExpenseItemRecord {
   id: string;
   name: string;
+  /** Optional user-authored context for this item; does not affect calculations. */
+  note?: string;
   quantity: number;
   unitPriceCents: number;
   assignedMemberIds: string[];

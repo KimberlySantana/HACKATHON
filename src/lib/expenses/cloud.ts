@@ -27,6 +27,7 @@ export function toCloudExpensePayload(expense: ExpenseRecord, groupMemberIds: st
     items: expense.items.map((item, sortOrder) => ({
       id: item.id,
       name: item.name,
+      note: item.note?.trim() || null,
       quantity: item.quantity,
       unit_price_cents: item.unitPriceCents,
       sort_order: sortOrder,
@@ -61,6 +62,7 @@ export function mapCloudExpenseRows(
     items.push({
       id,
       name: text(row.name, "expense item name"),
+      ...(typeof row.note === "string" && row.note.length ? { note: row.note } : {}),
       quantity: Number(row.quantity),
       unitPriceCents: cents(row.unit_price_cents),
       assignedMemberIds,
@@ -96,7 +98,7 @@ export async function loadCloudExpenses(client: SupabaseClient, groupId: string,
   const expenseIds = expenseRows.map((row) => row.id);
   const { data: itemRows, error: itemError } = await client
     .from("expense_items")
-    .select("id,expense_id,group_id,name,quantity,unit_price_cents,sort_order")
+    .select("id,expense_id,group_id,name,note,quantity,unit_price_cents,sort_order")
     .eq("group_id", groupId)
     .in("expense_id", expenseIds)
     .order("sort_order", { ascending: true });

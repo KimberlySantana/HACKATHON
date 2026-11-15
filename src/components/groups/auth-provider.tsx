@@ -4,26 +4,42 @@ import { createContext, useContext, useEffect, useMemo, useState, type ReactNode
 import type { User } from "@supabase/supabase-js";
 import { createClient } from "@/lib/supabase/client";
 
-interface AuthState { user: User | null; loading: boolean; signIn: (email: string) => Promise<void>; signOut: () => Promise<void>; }
+interface AuthState { user: User | null; loading: boolean; error: string | null; signIn: (email: string) => Promise<void>; signOut: () => Promise<void>; }
 const AuthContext = createContext<AuthState | null>(null);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const supabase = useMemo(() => createClient(), []);
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   useEffect(() => {
-    supabase.auth.getUser().then(({ data }) => { setUser(data.user); setLoading(false); });
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => setUser(session?.user ?? null));
-    return () => subscription.unsubscribe();
+    let active = true;
+    void supabase.auth.getUser().then(({ data, error: authError }) => {
+      if (!active) return;
+      setUser(data.user);
+      setError(authError ? "Couldn’t check your sign-in status. Cloud data may be unavailable until you reconnect." : null);
+      setLoading(false);
+    }).catch(() => {
+      if (!active) return;
+      setUser(null);
+      setError("Couldn’t check your sign-in status. Cloud data may be unavailable until you reconnect.");
+      setLoading(false);
+    });
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      setUser(session?.user ?? null);
+      setError(null);
+      setLoading(false);
+    });
+    return () => { active = false; subscription.unsubscribe(); };
   }, [supabase]);
   const value = useMemo<AuthState>(() => ({
-    user, loading,
+    user, loading, error,
     signIn: async (email) => {
       const { error } = await supabase.auth.signInWithOtp({ email, options: { emailRedirectTo: `${window.location.origin}/` } });
       if (error) throw error;
     },
     signOut: async () => { const { error } = await supabase.auth.signOut(); if (error) throw error; },
-  }), [user, loading, supabase]);
+  }), [user, loading, error, supabase]);
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
 

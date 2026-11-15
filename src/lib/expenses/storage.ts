@@ -14,6 +14,7 @@ function isExpense(value: unknown): value is ExpenseRecord {
     Number.isSafeInteger(value.taxCents) && Number(value.taxCents) >= 0 && Number.isSafeInteger(value.tipCents) && Number(value.tipCents) >= 0 &&
     typeof value.createdAt === "string" && value.items.every((item) => isRecord(item) &&
       typeof item.id === "string" && typeof item.name === "string" && Number.isInteger(item.quantity) && Number(item.quantity) > 0 &&
+      (item.note === undefined || (typeof item.note === "string" && item.note.length <= 500)) &&
       Number.isSafeInteger(item.unitPriceCents) && Number(item.unitPriceCents) >= 0 && Array.isArray(item.assignedMemberIds) &&
       item.assignedMemberIds.every((id) => typeof id === "string") &&
       (item.memberSharesCents === undefined || (isRecord(item.memberSharesCents) && Object.values(item.memberSharesCents).every((cents) => Number.isSafeInteger(cents) && Number(cents) >= 0))));
