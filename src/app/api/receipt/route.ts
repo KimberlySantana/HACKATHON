@@ -1,7 +1,10 @@
 import { NextResponse } from "next/server";
 import { mockReceipt } from "@/lib/receipt/mock";
 
-/** Returns demo data so receipt flows can be developed without credentials. */
+/** Keeps the sample fixture available to local developers without exposing it as production scanning. */
 export function GET() {
-  return NextResponse.json(mockReceipt);
+  if (process.env.NODE_ENV !== "development") {
+    return NextResponse.json({ error: "Receipt scanning is not available." }, { status: 503, headers: { "Cache-Control": "no-store" } });
+  }
+  return NextResponse.json(mockReceipt, { headers: { "Cache-Control": "no-store" } });
 }
