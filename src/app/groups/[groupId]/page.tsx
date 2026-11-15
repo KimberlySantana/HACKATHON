@@ -1,11 +1,10 @@
 import Link from "next/link";
 import { Suspense } from "react";
-import { ScanLine } from "lucide-react";
 import { GroupForm } from "@/components/groups/group-form";
 import { SplitzyMark } from "@/components/splitzy-mark";
 import { GroupExpenseOverview } from "@/components/expenses/group-expense-overview";
 import { GroupMembersPanel } from "@/components/groups/group-members-panel";
-import { groupExpenseHref, groupScannerHref } from "@/lib/groups/form";
+import { groupExpenseHref } from "@/lib/groups/form";
 
 export default function GroupDetailPage({ params, searchParams }: { params: Promise<{ groupId: string }>; searchParams: Promise<{ created?: string; updated?: string }> }) {
   return (
@@ -37,11 +36,10 @@ async function GroupDetail({ params, searchParams }: { params: Promise<{ groupId
       <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-center">
         <div><p className="text-xs font-semibold uppercase tracking-[0.1em] text-primary">NEXT STEP</p><h2 id="first-expense-title" className="mt-1 text-lg font-semibold">Start with a shared expense</h2><p className="mt-1 text-sm leading-5 text-muted">Add the people sharing this plan, then enter the items yourself and review the split before saving.</p></div>
         <div className="flex flex-wrap gap-2">
-          <Link href={groupScannerHref(groupId)} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl border border-border bg-white px-4 text-sm font-semibold text-foreground hover:bg-surface-muted"><ScanLine size={15} aria-hidden="true" />Scan Receipt</Link>
           <Link href={groupExpenseHref(groupId)} className="inline-flex min-h-11 items-center justify-center rounded-xl bg-primary px-4 text-sm font-semibold text-white hover:bg-primary-hover">Add manually</Link>
         </div>
       </div>
-      <p className="mt-3 rounded-xl bg-[#f7f6f1] px-3.5 py-2.5 text-xs leading-5 text-muted">Review every extracted amount, then choose who paid and assign items before saving.</p>
+      <p className="mt-3 rounded-xl bg-[#f7f6f1] px-3.5 py-2.5 text-xs leading-5 text-muted">Enter items, choose who paid, and assign each item before saving. AI receipt scanning is coming later.</p>
     </section>
     <GroupMembersPanel groupId={groupId} />
     <div className="flex justify-end"><Link href={`/groups/${encodedId}/settlement`} className="inline-flex min-h-11 items-center justify-center rounded-xl border border-border bg-white px-4 text-sm font-semibold text-foreground hover:bg-surface-muted">View settlement</Link></div>

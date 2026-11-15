@@ -299,6 +299,11 @@ function fileToImagePart(file: File, bytes: Uint8Array) {
 }
 
 export async function POST(request: Request) {
+  // The MVP release fails closed until authenticated scanning and quota setup are verified.
+  if (process.env.ENABLE_RECEIPT_SCANNING !== "true") {
+    return NextResponse.json({ code: "SCANNER_DISABLED", error: "Receipt scanning is unavailable." }, { status: 503, headers: { "Cache-Control": "no-store" } });
+  }
+
   const origin = request.headers.get("origin");
   const host = request.headers.get("x-forwarded-host") ?? request.headers.get("host");
   if (origin && host) {
