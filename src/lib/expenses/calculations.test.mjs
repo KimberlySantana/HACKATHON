@@ -35,3 +35,10 @@ test("settlement nets payments and shares into a minimal transfer", () => {
   assert.deepEqual([...balances], [["a", 254], ["b", -254]]);
   assert.deepEqual(transfers, [{ fromMemberId: "b", toMemberId: "a", amountCents: 254 }]);
 });
+
+test("does not settle a group with mixed original currencies", () => {
+  assert.throws(() => calculateSettlement([
+    { ...splitReceipt, currency: "USD" },
+    { ...splitReceipt, id: "receipt-eur", currency: "EUR" },
+  ], [{ id: "a", name: "A" }, { id: "b", name: "B" }]), /different currencies/);
+});

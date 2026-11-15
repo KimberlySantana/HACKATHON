@@ -1,6 +1,7 @@
 import type { Receipt } from "@/types";
 import type { ReceiptReview } from "@/lib/receipt/extraction";
 import { stableReceiptUuid } from "@/lib/splitting/receipt";
+import { isCurrencyCode } from "@/lib/currency/types";
 
 export const RECEIPT_TRANSFER_STORAGE_KEY = "splitzy.receipt-transfer.v1";
 
@@ -60,6 +61,7 @@ function isReceipt(value: unknown): value is Receipt {
   const receipt = value as Partial<Receipt>;
   return typeof receipt.id === "string" && typeof receipt.merchant === "string" && typeof receipt.date === "string" &&
     typeof receipt.subtotal === "number" && typeof receipt.tax === "number" && typeof receipt.tip === "number" && typeof receipt.total === "number" &&
+    (receipt.currency === null || isCurrencyCode(receipt.currency)) &&
     Array.isArray(receipt.items) && receipt.items.every((item) => {
       if (!item || typeof item !== "object") return false;
       const candidate = item as Partial<Receipt["items"][number]>;

@@ -1,3 +1,5 @@
+import type { CurrencyCode } from "@/lib/currency/types";
+
 /** A shared contract for the group splitting and receipt scanning features. */
 export interface Group {
   id: string;
@@ -21,6 +23,8 @@ export interface Receipt {
   tax: number;
   tip: number;
   total: number;
+  /** Currency visibly identified on the receipt; null means it needs review. */
+  currency: CurrencyCode | null;
   items: ReceiptItem[];
 }
 

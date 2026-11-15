@@ -1,6 +1,7 @@
 import { calculateItemSharesCents } from "./calculations.ts";
 import type { ExpenseRecord } from "./types.ts";
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { isCurrencyCode, type CurrencyCode } from "../currency/types.ts";
 
 type CloudRow = Record<string, unknown>;
 
@@ -15,6 +16,11 @@ function text(value: unknown, field: string): string {
   return value;
 }
 
+function currency(value: unknown): CurrencyCode {
+  if (!isCurrencyCode(value)) throw new Error("Supabase returned an invalid expense currency.");
+  return value;
+}
+
 export function toCloudExpensePayload(expense: ExpenseRecord, groupMemberIds: string[]) {
   return {
     id: expense.id,
@@ -23,6 +29,7 @@ export function toCloudExpensePayload(expense: ExpenseRecord, groupMemberIds: st
     description: expense.description,
     tax_cents: expense.taxCents,
     tip_cents: expense.tipCents,
+    currency: expense.currency ?? "USD",
     created_at: expense.createdAt,
     items: expense.items.map((item, sortOrder) => ({
       id: item.id,
@@ -78,6 +85,7 @@ export function mapCloudExpenseRows(
       paidByMemberId: text(row.paid_by_member_id, "expense paid_by_member_id"),
       taxCents: cents(row.tax_cents),
       tipCents: cents(row.tip_cents),
+      currency: currency(row.currency ?? "USD"),
       createdAt: text(row.created_at, "expense created_at"),
       items: itemsByExpense.get(id) ?? [],
     };
@@ -87,7 +95,7 @@ export function mapCloudExpenseRows(
 export async function loadCloudExpenses(client: SupabaseClient, groupId: string, memberIds: string[]) {
   const { data: expenseRows, error: expenseError } = await client
     .from("expenses")
-    .select("id,group_id,description,paid_by_member_id,tax_cents,tip_cents,created_at")
+    .select("id,group_id,description,paid_by_member_id,tax_cents,tip_cents,currency,created_at")
     .eq("group_id", groupId)
     .order("created_at", { ascending: false });
   if (expenseError) throw expenseError;

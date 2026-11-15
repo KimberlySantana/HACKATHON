@@ -1,5 +1,6 @@
 import type { Receipt, ReceiptItem } from "@/types";
 import type { ReceiptReview } from "@/lib/receipt/extraction";
+import { CURRENCY_DECIMALS, isCurrencyCode, type CurrencyCode } from "../currency/types.ts";
 
 export type ReceiptAdjustment = {
   id: string;
@@ -34,6 +35,7 @@ export type MemberBreakdown = {
 
 export type SplitResult = {
   receiptId: string;
+  currency: CurrencyCode;
   canFinalize: boolean;
   receiptTotalCents: number;
   allocatedTotalCents: number;
@@ -51,15 +53,19 @@ export type ReceiptTransferValidation = {
   receiptTotalCents: number | null;
 };
 
-function cents(amount: number): number | null {
+function minorUnits(amount: number, currency: CurrencyCode): number | null {
   if (!Number.isFinite(amount) || amount < 0) return null;
-  const value = Math.round(amount * 100);
+  const decimals = CURRENCY_DECIMALS[currency];
+  const text = String(amount);
+  const match = /^(\d+)(?:\.(\d+))?$/.exec(text);
+  if (!match || (match[2] ?? "").length > decimals) return null;
+  const value = Number(match[1]) * 10 ** decimals + Number((match[2] ?? "").padEnd(decimals, "0"));
   return Number.isSafeInteger(value) ? value : null;
 }
 
-function lineTotalCents(item: ReceiptItem): number | null {
+function lineTotalCents(item: ReceiptItem, currency: CurrencyCode): number | null {
   if (!Number.isInteger(item.quantity) || item.quantity < 1) return null;
-  const unitPriceCents = cents(item.unitPrice);
+  const unitPriceCents = minorUnits(item.unitPrice, currency);
   if (unitPriceCents === null) return null;
   const lineTotal = unitPriceCents * item.quantity;
   return Number.isSafeInteger(lineTotal) ? lineTotal : null;
@@ -125,10 +131,13 @@ export function validateReceiptForTransfer(
 ): ReceiptTransferValidation {
   const flags: string[] = [];
   const notes: string[] = [];
-  const subtotalCents = cents(receipt.subtotal);
-  const totalCents = cents(receipt.total);
-  const taxCents = cents(receipt.tax);
-  const tipCents = cents(receipt.tip);
+  const currency = isCurrencyCode(receipt.currency) ? receipt.currency : null;
+  if (!currency) { flags.push("currency"); notes.push("Receipt currency is missing or unsupported. Confirm it before sending this receipt to a group."); }
+  const arithmeticCurrency = currency ?? "USD";
+  const subtotalCents = minorUnits(receipt.subtotal, arithmeticCurrency);
+  const totalCents = minorUnits(receipt.total, arithmeticCurrency);
+  const taxCents = minorUnits(receipt.tax, arithmeticCurrency);
+  const tipCents = minorUnits(receipt.tip, arithmeticCurrency);
 
   if (subtotalCents === null) { flags.push("subtotal"); notes.push("Subtotal is missing or invalid."); }
   if (totalCents === null) { flags.push("total"); notes.push("Receipt total is missing or invalid."); }
@@ -137,8 +146,8 @@ export function validateReceiptForTransfer(
 
   let itemSubtotalCents = 0;
   for (const [index, item] of receipt.items.entries()) {
-    const lineTotal = lineTotalCents(item);
-    const storedTotal = cents(item.total);
+    const lineTotal = lineTotalCents(item, arithmeticCurrency);
+    const storedTotal = minorUnits(item.total, arithmeticCurrency);
     if (!item.name.trim() || lineTotal === null || storedTotal === null || Math.abs(lineTotal - storedTotal) > 1) {
       flags.push(`items[${index}]`);
       notes.push(`Item ${index + 1} needs a valid name, quantity, and price.`);
@@ -173,6 +182,7 @@ export function validateReceiptForTransfer(
 /** Calculates an exact, itemized split using integer cents and stable largest-remainder rounding. */
 export function calculateReceiptSplit(input: SplitReceiptInput): SplitResult {
   const { receipt, memberIds, reviewFlags, tipConfirmed, reviewAcknowledged = false, adjustments = [] } = input;
+  const currency = isCurrencyCode(receipt.currency) ? receipt.currency : "USD";
   const orderedMemberIds = [...new Set(memberIds)];
   const validation = validateReceiptForTransfer(receipt, reviewFlags, tipConfirmed, reviewAcknowledged, adjustments);
   const flags = [...validation.flags];
@@ -190,7 +200,7 @@ export function calculateReceiptSplit(input: SplitReceiptInput): SplitResult {
       notes.push(`Item “${item.name || "this item"}” has an invalid or duplicate member assignment.`);
       continue;
     }
-    const lineTotal = lineTotalCents(item);
+    const lineTotal = lineTotalCents(item, currency);
     if (lineTotal === null) continue;
     const shares = splitEvenly(lineTotal, assigned);
     itemShares.set(item.id, shares);
@@ -201,8 +211,8 @@ export function calculateReceiptSplit(input: SplitReceiptInput): SplitResult {
   }
 
   const totalBasis = [...basis.values()].reduce((sum, value) => sum + value, 0);
-  const taxCents = cents(receipt.tax) ?? 0;
-  const tipCents = cents(receipt.tip) ?? 0;
+  const taxCents = minorUnits(receipt.tax, currency) ?? 0;
+  const tipCents = minorUnits(receipt.tip, currency) ?? 0;
   let tax = new Map<string, number>();
   let tip = new Map<string, number>();
   if (orderedMemberIds.length > 0 && totalBasis > 0) {
@@ -245,6 +255,7 @@ export function calculateReceiptSplit(input: SplitReceiptInput): SplitResult {
 
   return {
     receiptId: receipt.id,
+    currency,
     canFinalize: flags.length === 0 && totalsMatch,
     receiptTotalCents,
     allocatedTotalCents,

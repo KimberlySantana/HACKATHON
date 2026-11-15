@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import type { ReactNode } from "react";
 import { LanguageProvider } from "@/components/i18n";
+import { CurrencyProvider } from "@/components/currency";
 import "./globals.css";
 import { AuthProvider } from "@/components/groups/auth-provider";
 
@@ -10,5 +11,5 @@ export const metadata: Metadata = {
 };
 
 export default function RootLayout({ children }: Readonly<{ children: ReactNode }>) {
-  return <html lang="en" className="h-full antialiased"><body className="min-h-full"><LanguageProvider><AuthProvider>{children}</AuthProvider></LanguageProvider></body></html>;
+  return <html lang="en" className="h-full antialiased"><body className="min-h-full"><LanguageProvider><CurrencyProvider><AuthProvider>{children}</AuthProvider></CurrencyProvider></LanguageProvider></body></html>;
 }

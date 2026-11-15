@@ -70,16 +70,16 @@ export function GroupForm({ groupId }: GroupFormProps) {
 
   if (groupId && ready && !currentGroup) return <Card className="p-6"><h2 className="text-lg font-semibold">Group not found</h2><p className="mt-2 text-sm text-muted">It may have been removed or isn’t available in this browser.</p><Link href="/groups" className="mt-4 inline-flex items-center gap-2 text-sm font-semibold text-primary"><ArrowLeft size={15} aria-hidden="true"/>Back to groups</Link></Card>;
 
-  return <form id="create-group" onSubmit={handleSubmit} className="rounded-2xl border border-border bg-white p-5 sm:p-7">
+  return <form id="create-group" onSubmit={handleSubmit} className="brand-card p-5 sm:p-7">
     <div className="flex items-start gap-3 border-b border-[#edf1ed] pb-5">
       <span className="grid h-10 w-10 shrink-0 place-items-center rounded-xl bg-[#eaf1ec] text-primary"><UsersRound size={19} aria-hidden="true" /></span>
-      <div><p className="text-xs font-semibold uppercase tracking-[0.1em] text-[#87928b]">GROUP DETAILS</p><h2 className="mt-1 text-xl font-semibold tracking-[-0.035em]">{groupId ? "Edit your group" : "Create a group"}</h2><p className="mt-1 text-sm leading-5 text-muted">A trip, a shared home, dinner out — give your group a name.</p></div>
+      <div><p className="brand-kicker">GROUP DETAILS</p><h2 className="mt-1 text-xl font-extrabold tracking-[-0.035em]">{groupId ? "Edit your group" : "Create a group"}</h2><p className="mt-1 text-sm leading-5 text-muted">A trip, a shared home, dinner out — give your group a name.</p></div>
     </div>
 
-    {storageError && <p role="alert" className="mt-5 flex items-start gap-2 rounded-xl border border-[#eadbb7] bg-warning-soft p-3 text-sm leading-5 text-[#75511e]"><CircleAlert size={17} className="mt-0.5 shrink-0" aria-hidden="true" />{storageError}</p>}
+    {storageError && <p role="alert" className="brand-alert brand-alert-warning mt-5 flex items-start gap-2"><CircleAlert size={17} className="mt-0.5 shrink-0" aria-hidden="true" />{storageError}</p>}
 
     <div className="mt-5">
-      <label htmlFor="group-name" className="mb-1.5 block text-sm font-semibold">Group name</label>
+      <label htmlFor="group-name" className="brand-label mb-1.5 block">Group name</label>
       <Input id="group-name" name="groupName" value={name} onChange={(event) => setName(event.target.value)} placeholder="e.g. Weekend in Portland" maxLength={60} autoComplete="off" />
     </div>
 
@@ -98,7 +98,7 @@ export function GroupForm({ groupId }: GroupFormProps) {
       {members.length === 0 && <p className="rounded-xl border border-dashed border-border bg-[#fcfdfb] px-4 py-4 text-sm text-muted">No people added yet. Add at least one person to continue.</p>}
     </div>
 
-    {formError && <p role="alert" className="mt-4 flex items-start gap-2 rounded-xl border border-[#f0d3cd] bg-danger-soft p-3 text-sm text-danger"><CircleAlert size={16} className="mt-0.5 shrink-0" aria-hidden="true" />{formError}</p>}
+    {formError && <p role="alert" className="brand-alert brand-alert-danger mt-4 flex items-start gap-2"><CircleAlert size={16} className="mt-0.5 shrink-0" aria-hidden="true" />{formError}</p>}
 
     <div className="mt-7 flex flex-col-reverse gap-2.5 sm:flex-row sm:justify-end">
       <Link href={groupId ? `/groups/${encodeURIComponent(groupId)}` : "/"} className="inline-flex min-h-11 items-center justify-center rounded-xl px-4 text-sm font-semibold text-muted hover:bg-surface-muted hover:text-foreground">Cancel</Link>

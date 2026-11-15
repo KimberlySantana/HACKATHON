@@ -1,10 +1,11 @@
 import Link from "next/link";
 import { Suspense } from "react";
+import { ArrowRight } from "lucide-react";
+import { AppShell } from "@/components/app-shell";
 import { SettlementSummary } from "@/components/expenses/settlement-summary";
-import { SplitzyMark } from "@/components/splitzy-mark";
 
 export default function SettlementPage({ params }: { params: Promise<{ groupId: string }> }) {
-  return <main className="min-h-screen bg-[#fbfaf7] text-[#25251f]"><header className="mx-auto flex max-w-6xl items-center justify-between px-5 py-5 sm:px-8 sm:py-7"><Link href="/" className="flex items-center gap-2.5"><SplitzyMark /><span className="text-[1.35rem] font-extrabold tracking-[-0.06em]">splitzy</span></Link><span className="text-sm font-semibold text-[#77766d]">Group settlement</span></header><div className="mx-auto max-w-2xl px-5 pb-16 pt-4 sm:px-8"><Suspense fallback={<p role="status" className="rounded-2xl border border-[#ebe7de] bg-white p-5 text-sm text-[#77766d]">Loading settlement…</p>}><SettlementContent params={params} /></Suspense></div></main>;
+  return <AppShell title="Settlement" description="Review balances and settle up with your group." active="groups" action={<Link href="/groups" className="brand-button brand-button-cream text-sm"><ArrowRight size={15} className="rotate-180" aria-hidden="true" />Groups</Link>}><Suspense fallback={<p role="status" className="brand-card p-5 text-sm text-muted">Loading settlement…</p>}><SettlementContent params={params} /></Suspense></AppShell>;
 }
 
 async function SettlementContent({ params }: { params: Promise<{ groupId: string }> }) {

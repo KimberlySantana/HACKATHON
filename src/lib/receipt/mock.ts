@@ -10,6 +10,7 @@ export const mockReceipt: Receipt = {
   tax: 3.36,
   tip: 5.04,
   total: 50.4,
+  currency: "USD",
   items: [
     { id: "item-1", name: "Avocado toast", quantity: 1, unitPrice: 14, total: 14, assignedMemberIds: ["member-maya"] },
     { id: "item-2", name: "Sunday pasta", quantity: 1, unitPrice: 22, total: 22, assignedMemberIds: ["member-jules"] },

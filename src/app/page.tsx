@@ -3,7 +3,7 @@
 import Image from "next/image";
 import Link from "next/link";
 import { ArrowDownLeft, ArrowRight, ArrowUpRight, Plus, ReceiptText, UsersRound } from "lucide-react";
-import { LanguageSwitcher, useLanguage } from "@/components/i18n";
+import { useLanguage } from "@/components/i18n";
 import { AppShell } from "@/components/app-shell";
 import { GroupList } from "@/components/groups/group-list";
 import { Badge } from "@/components/ui/badge";
@@ -31,12 +31,9 @@ export default function Home() {
       description="A clear view of the shared costs you’re keeping track of."
       active="overview"
       action={
-        <div className="flex items-center gap-2">
-          <LanguageSwitcher />
-          <Link href="/groups" className="inline-flex min-h-9 items-center gap-2 rounded-xl bg-primary px-3 text-sm font-semibold text-white hover:bg-primary-hover">
-            <Plus size={15} aria-hidden="true" />{t("home.createGroup")}
-          </Link>
-        </div>
+        <Link href="/groups" className="brand-button brand-button-coral min-h-10 px-3 text-sm">
+          <Plus size={15} aria-hidden="true" />{t("home.createGroup")}
+        </Link>
       }
     >
       <div className="space-y-7 sm:space-y-9">

@@ -7,10 +7,11 @@ import { AlertCircle, ArrowRight, Check, CircleDollarSign, Plus, ScanLine, Trash
 import { useLanguage } from "@/components/i18n";
 import { useSavedGroups } from "@/components/groups/use-saved-groups";
 import { useGroupExpenses, type ExpenseStorageMode } from "@/components/expenses/use-group-expenses";
-import { calculateExpenseShares, formatCents, getExpenseSubtotalCents, parseMoneyToCents } from "@/lib/expenses/calculations";
+import { calculateExpenseShares, formatCents, getExpenseSubtotalCents, parseMoneyToMinorUnits } from "@/lib/expenses/calculations";
 import { getUnassignedItems } from "@/lib/expenses/assignments";
 import { clearReceiptTransfer, readReceiptTransfer, receiptItemId, type PendingReceiptTransfer } from "@/lib/expenses/receipt-transfer";
 import type { ExpenseRecord } from "@/lib/expenses/types";
+import { CURRENCY_CODES, CURRENCY_DECIMALS, CURRENCY_LABELS, type CurrencyCode } from "@/lib/currency/types";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -18,8 +19,12 @@ import { Input } from "@/components/ui/input";
 
 interface DraftItem { id: string; name: string; quantity: string; unitPrice: string; assignedMemberIds: string[]; memberSharesCents?: Record<string, number>; }
 const blankItem = (): DraftItem => ({ id: "new-item-1", name: "", quantity: "1", unitPrice: "", assignedMemberIds: [] });
-const moneyValue = (value: string) => value.trim() === "" ? 0 : parseMoneyToCents(value);
-const centsInput = (amount: number) => `${Math.floor(amount / 100)}.${String(amount % 100).padStart(2, "0")}`;
+const moneyValue = (value: string, currency: CurrencyCode) => value.trim() === "" ? 0 : parseMoneyToMinorUnits(value, currency);
+const centsInput = (amount: number, currency: CurrencyCode) => {
+  const decimals = CURRENCY_DECIMALS[currency];
+  if (decimals === 0) return String(amount);
+  return `${Math.floor(amount / 100)}.${String(amount % 100).padStart(2, "0")}`;
+};
 
 export function ExpenseForm({ groupId, expenseId, receiptId, offline = false }: { groupId: string; expenseId?: string; receiptId?: string; offline?: boolean }) {
   const router = useRouter();
@@ -33,6 +38,7 @@ export function ExpenseForm({ groupId, expenseId, receiptId, offline = false }: 
   const [items, setItems] = useState<DraftItem[]>([blankItem()]);
   const [tax, setTax] = useState("");
   const [tip, setTip] = useState("");
+  const [currency, setCurrency] = useState<CurrencyCode>("USD");
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [pendingOfflineExpense, setPendingOfflineExpense] = useState<ExpenseRecord | null>(null);
@@ -51,13 +57,14 @@ export function ExpenseForm({ groupId, expenseId, receiptId, offline = false }: 
     if (!editRecord) { setEditMissing(true); setEditReady(true); return; }
     setDescription(editRecord.description);
     setPaidByMemberId(editRecord.paidByMemberId);
-    setTax(centsInput(editRecord.taxCents));
-    setTip(centsInput(editRecord.tipCents));
+    setCurrency(editRecord.currency ?? "USD");
+    setTax(centsInput(editRecord.taxCents, editRecord.currency ?? "USD"));
+    setTip(centsInput(editRecord.tipCents, editRecord.currency ?? "USD"));
     setItems(editRecord.items.map((item) => ({
       id: item.id,
       name: item.name,
       quantity: String(item.quantity),
-      unitPrice: centsInput(item.unitPriceCents),
+      unitPrice: centsInput(item.unitPriceCents, editRecord.currency ?? "USD"),
       assignedMemberIds: item.assignedMemberIds,
       memberSharesCents: item.memberSharesCents,
     })));
@@ -69,14 +76,16 @@ export function ExpenseForm({ groupId, expenseId, receiptId, offline = false }: 
     const pending = readReceiptTransfer(groupId, receiptId);
     if (!pending) return;
     setReceiptTransfer(pending);
+    setCurrency(pending.receipt.currency ?? "USD");
     setDescription(pending.receipt.merchant);
-    setTax(centsInput(Math.round(pending.receipt.tax * 100)));
-    setTip(centsInput(Math.round(pending.receipt.tip * 100)));
+    const transferCurrency = pending.receipt.currency ?? "USD";
+    setTax(centsInput(parseMoneyToMinorUnits(String(pending.receipt.tax), transferCurrency) ?? 0, transferCurrency));
+    setTip(centsInput(parseMoneyToMinorUnits(String(pending.receipt.tip), transferCurrency) ?? 0, transferCurrency));
     setItems(pending.receipt.items.map((item) => ({
       id: receiptItemId(groupId, pending.receipt.id, item.id),
       name: item.name,
       quantity: String(item.quantity),
-      unitPrice: centsInput(Math.round(item.unitPrice * 100)),
+      unitPrice: centsInput(parseMoneyToMinorUnits(String(item.unitPrice), transferCurrency) ?? 0, transferCurrency),
       assignedMemberIds: [],
     })));
   }, [expenseId, expenseStore.loading, groupId, loading, receiptId, saved]);
@@ -87,21 +96,21 @@ export function ExpenseForm({ groupId, expenseId, receiptId, offline = false }: 
 
   const parsedItems = useMemo(() => items.map((item) => ({
     draft: item,
-    price: parseMoneyToCents(item.unitPrice),
+    price: parseMoneyToMinorUnits(item.unitPrice, currency),
     quantity: Number(item.quantity),
   })), [items]);
   const subtotalCents = parsedItems.reduce((sum, item) => sum + (item.price ?? 0) * (Number.isInteger(item.quantity) ? item.quantity : 0), 0);
-  const taxCents = moneyValue(tax);
-  const tipCents = moneyValue(tip);
-  const receiptTotalCents = receiptTransfer ? Math.round(receiptTransfer.receipt.total * 100) : null;
+  const taxCents = moneyValue(tax, currency);
+  const tipCents = moneyValue(tip, currency);
+  const receiptTotalCents = receiptTransfer ? parseMoneyToMinorUnits(String(receiptTransfer.receipt.total), currency) : null;
   const memberIds = saved?.members.map((member) => member.id) ?? [];
   const unassignedItems = getUnassignedItems(items, memberIds);
   const unassignedItemIds = new Set(unassignedItems.map((item) => item.id));
   const preview = useMemo(() => {
     if (!saved || !description.trim() || parsedItems.some(({ draft, price, quantity }) => !draft.name.trim() || price === null || price < 0 || !Number.isInteger(quantity) || quantity < 1 || draft.assignedMemberIds.length === 0) || taxCents === null || tipCents === null) return null;
-    const draft: ExpenseRecord = { id: "preview", groupId, description, paidByMemberId: paidByMemberId || saved.members[0]?.id || "", items: parsedItems.map(({ draft: item, price, quantity }) => ({ id: item.id, name: item.name.trim(), quantity, unitPriceCents: price!, assignedMemberIds: item.assignedMemberIds, memberSharesCents: item.memberSharesCents })), taxCents, tipCents, createdAt: "" };
+    const draft: ExpenseRecord = { id: "preview", groupId, description, paidByMemberId: paidByMemberId || saved.members[0]?.id || "", items: parsedItems.map(({ draft: item, price, quantity }) => ({ id: item.id, name: item.name.trim(), quantity, unitPriceCents: price!, assignedMemberIds: item.assignedMemberIds, memberSharesCents: item.memberSharesCents })), taxCents, tipCents, currency, createdAt: "" };
     try { return calculateExpenseShares(draft, saved.members.map((member) => member.id)); } catch { return null; }
-  }, [description, groupId, paidByMemberId, parsedItems, saved, taxCents, tipCents]);
+  }, [currency, description, groupId, paidByMemberId, parsedItems, saved, taxCents, tipCents]);
 
   function updateItem(itemId: string, update: Partial<DraftItem>) {
     setItems((current) => current.map((item) => {
@@ -157,7 +166,7 @@ export function ExpenseForm({ groupId, expenseId, receiptId, offline = false }: 
       scrollToFirstUnassignedItem();
       return;
     }
-    if (taxCents === null || tipCents === null) return setError("Enter tax and tip as dollar amounts with up to two decimal places.");
+    if (taxCents === null || tipCents === null) return setError(`Enter tax and tip as ${currency} amounts with the correct decimal precision.`);
     if (receiptTotalCents !== null && subtotalCents + taxCents + tipCents !== receiptTotalCents) return setError(t("expense.receiptTotalMismatch"));
     if (taxCents + tipCents > 0 && subtotalCents === 0) return setError("Add an item with a price before adding tax or tip.");
     if (!Number.isSafeInteger(subtotalCents + taxCents + tipCents)) return setError("This expense total is too large to calculate safely.");
@@ -166,22 +175,22 @@ export function ExpenseForm({ groupId, expenseId, receiptId, offline = false }: 
     const expense: ExpenseRecord = {
       id: expenseId ?? receiptTransfer?.expenseId ?? crypto.randomUUID(), groupId, description: description.trim(), paidByMemberId,
       items: normalized.map(({ draft, price, quantity }) => ({ id: draft.id.startsWith("new-item") ? crypto.randomUUID() : draft.id, name: draft.name.trim(), quantity, unitPriceCents: price!, assignedMemberIds: draft.assignedMemberIds, memberSharesCents: draft.memberSharesCents })),
-      taxCents, tipCents, createdAt: editRecord?.createdAt ?? new Date().toISOString(),
+      taxCents, tipCents, currency, createdAt: editRecord?.createdAt ?? new Date().toISOString(),
     };
     const target: ExpenseStorageMode = expenseStore.signedIn ? (offline ? "offline" : "cloud") : "guest";
     await persist(expense, target);
   }
 
-  if (loading || expenseStore.loading || !editReady) return <p role="status" className="rounded-2xl border border-[#ebe7de] bg-white p-5 text-sm text-[#77766d]">Loading {expenseId ? "expense" : "group"}…</p>;
-  if (!saved) return <section className="rounded-3xl border border-[#ebe7de] bg-white p-6"><h1 className="text-xl font-bold">Group not found</h1><p className="mt-2 text-sm text-[#77766d]">Load the group in this browser or wait for cloud access to return.</p><Link className="mt-4 inline-flex font-bold text-[#d9674b]" href="/">Back home →</Link></section>;
-  if (editMissing) return <section className="rounded-3xl border border-[#ebe7de] bg-white p-6"><h1 className="text-xl font-bold">Expense not found</h1><p role={expenseStore.error ? "alert" : "status"} className="mt-2 text-sm text-[#77766d]">{expenseStore.error ?? "It may have been deleted or belongs to a different storage mode."}</p><Link className="mt-4 inline-flex font-bold text-[#d9674b]" href={`/groups/${encodeURIComponent(groupId)}/settlement`}>Back to settlement →</Link></section>;
+  if (loading || expenseStore.loading || !editReady) return <p role="status" className="brand-card p-5 text-sm text-muted">Loading {expenseId ? "expense" : "group"}…</p>;
+  if (!saved) return <section className="brand-card p-6"><h1 className="text-xl font-extrabold">Group not found</h1><p className="mt-2 text-sm text-muted">Load the group in this browser or wait for cloud access to return.</p><Link className="mt-4 inline-flex font-extrabold text-[#a45c4b]" href="/">Back home →</Link></section>;
+  if (editMissing) return <section className="brand-card p-6"><h1 className="text-xl font-extrabold">Expense not found</h1><p role={expenseStore.error ? "alert" : "status"} className="mt-2 text-sm text-muted">{expenseStore.error ?? "It may have been deleted or belongs to a different storage mode."}</p><Link className="mt-4 inline-flex font-extrabold text-[#a45c4b]" href={`/groups/${encodeURIComponent(groupId)}/settlement`}>Back to settlement →</Link></section>;
 
   return <form ref={formRef} onSubmit={submit} className="grid items-start gap-5 lg:grid-cols-[minmax(0,1fr)_320px] lg:gap-6">
     <div className="space-y-5">
       <Card className="p-5 sm:p-6">
         <div className="flex flex-wrap items-start justify-between gap-3 border-b border-[#edf1ed] pb-5">
           <div><Badge tone="green">{saved.group.name}</Badge><h2 className="mt-2 text-xl font-semibold tracking-[-0.035em]">{expenseId ? "Review expense" : "Add an expense"}</h2><p className="mt-1 max-w-xl text-sm leading-5 text-muted">Enter the receipt details. You’ll review each person’s share before you save.</p></div>
-          <Link href="/scan" className="inline-flex min-h-9 items-center gap-2 rounded-xl border border-border bg-white px-3 text-xs font-semibold text-foreground hover:bg-surface-muted"><ScanLine size={15} aria-hidden="true" />Scan instead</Link>
+          <Link href="/scan" className="brand-button brand-button-cream min-h-9 px-3 text-xs"><ScanLine size={15} aria-hidden="true" />Scan instead</Link>
         </div>
 
         {!expenseStore.signedIn && <p role="status" className="mt-4 rounded-xl border border-[#eadbb7] bg-warning-soft px-3.5 py-3 text-sm leading-5 text-[#75511e]">Guest mode · this expense stays in this browser and won’t sync to another device.</p>}
@@ -190,9 +199,10 @@ export function ExpenseForm({ groupId, expenseId, receiptId, offline = false }: 
         {(storageError || expenseStore.error) && <p role="alert" className="mt-4 flex items-start gap-2 rounded-xl border border-[#f0d3cd] bg-danger-soft px-3.5 py-3 text-sm leading-5 text-danger"><AlertCircle size={16} className="mt-0.5 shrink-0" aria-hidden="true" />{expenseStore.error ?? storageError}</p>}
 
         <div className="mt-5 grid gap-4 sm:grid-cols-2">
-          <div className="sm:col-span-2"><label htmlFor="expense-description" className="mb-1.5 block text-sm font-semibold">Merchant or expense name</label><Input id="expense-description" required maxLength={80} value={description} onChange={(event) => setDescription(event.target.value)} placeholder="e.g. Dinner at Sunroom" autoComplete="off" /></div>
-          <div><label htmlFor="paid-by" className="mb-1.5 block text-sm font-semibold">Paid by</label><select id="paid-by" value={paidByMemberId} onChange={(event) => setPaidByMemberId(event.target.value)} className="h-11 w-full rounded-xl border border-border bg-white px-3.5 text-sm shadow-sm outline-none focus:border-primary focus:ring-4 focus:ring-primary/10">{saved.members.map((member) => <option key={member.id} value={member.id}>{member.name}</option>)}</select></div>
-          <div className="flex items-end"><p className="text-xs leading-5 text-muted">The payer covers the full receipt upfront. The split below shows how the group shares it.</p></div>
+          <div className="sm:col-span-2"><label htmlFor="expense-description" className="brand-label mb-1.5 block">Merchant or expense name</label><Input id="expense-description" required maxLength={80} value={description} onChange={(event) => setDescription(event.target.value)} placeholder="e.g. Dinner at Sunroom" autoComplete="off" /></div>
+          <div><label htmlFor="paid-by" className="brand-label mb-1.5 block">Paid by</label><select id="paid-by" value={paidByMemberId} onChange={(event) => setPaidByMemberId(event.target.value)} className="brand-input h-11 text-sm">{saved.members.map((member) => <option key={member.id} value={member.id}>{member.name}</option>)}</select></div>
+          <div><label htmlFor="expense-currency" className="brand-label mb-1.5 block">Original currency</label><select id="expense-currency" value={currency} onChange={(event) => setCurrency(event.target.value as CurrencyCode)} className="brand-input h-11 text-sm">{CURRENCY_CODES.map((code) => <option key={code} value={code}>{CURRENCY_LABELS[code]}</option>)}</select></div>
+          <div className="flex items-end sm:col-span-2"><p className="text-xs leading-5 text-muted">The payer covers the full receipt upfront. Splitting and settlement stay in the original currency; converted amounts are display-only.</p></div>
         </div>
       </Card>
 
@@ -207,9 +217,9 @@ export function ExpenseForm({ groupId, expenseId, receiptId, offline = false }: 
             return <article key={item.id} className={`p-4 sm:p-5 ${needsAssignment ? "bg-[#fff9f7]" : "bg-white"}`}>
               <div className="mb-3 flex items-center justify-between gap-3"><h4 className="text-sm font-semibold">Item {index + 1}</h4>{items.length > 1 && <Button type="button" variant="ghost" size="sm" onClick={() => setItems((current) => current.filter((entry) => entry.id !== item.id))} className="min-h-8 px-2 text-muted hover:bg-danger-soft hover:text-danger"><Trash2 size={14} aria-hidden="true" />Remove</Button>}</div>
               <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_104px_138px]">
-                <div><label className="mb-1.5 block text-xs font-semibold text-muted" htmlFor={`item-name-${item.id}`}>Item name</label><Input id={`item-name-${item.id}`} required maxLength={80} value={item.name} onChange={(event) => updateItem(item.id, { name: event.target.value })} placeholder="Product or dish" className={needsAssignment ? "border-[#e8b1a5]" : ""} /></div>
-                <div><label className="mb-1.5 block text-xs font-semibold text-muted" htmlFor={`qty-${item.id}`}>Qty</label><Input id={`qty-${item.id}`} type="number" min="1" max="999" step="1" value={item.quantity} onChange={(event) => updateItem(item.id, { quantity: event.target.value })} inputMode="numeric" /></div>
-                <div><label className="mb-1.5 block text-xs font-semibold text-muted" htmlFor={`price-${item.id}`}>Price each · USD</label><Input id={`price-${item.id}`} inputMode="decimal" value={item.unitPrice} onChange={(event) => updateItem(item.id, { unitPrice: event.target.value })} placeholder="0.00" /></div>
+                <div><label className="brand-label mb-1.5 block" htmlFor={`item-name-${item.id}`}>Item name</label><Input id={`item-name-${item.id}`} required maxLength={80} value={item.name} onChange={(event) => updateItem(item.id, { name: event.target.value })} placeholder="Product or dish" className={needsAssignment ? "border-[#e8b1a5]" : ""} /></div>
+                <div><label className="brand-label mb-1.5 block" htmlFor={`qty-${item.id}`}>Qty</label><Input id={`qty-${item.id}`} type="number" min="1" max="999" step="1" value={item.quantity} onChange={(event) => updateItem(item.id, { quantity: event.target.value })} inputMode="numeric" /></div>
+                <div><label className="brand-label mb-1.5 block" htmlFor={`price-${item.id}`}>Price each · {currency}</label><Input id={`price-${item.id}`} inputMode="decimal" value={item.unitPrice} onChange={(event) => updateItem(item.id, { unitPrice: event.target.value })} placeholder={CURRENCY_DECIMALS[currency] === 0 ? "0" : "0.00"} /></div>
               </div>
               <fieldset id={`item-assignees-${item.id}`} aria-invalid={needsAssignment} aria-describedby={needsAssignment ? `item-assignment-warning-${item.id}` : undefined} className="mt-4">
                 <legend className="mb-2 text-xs font-semibold text-muted">Shared by</legend>
@@ -226,14 +236,14 @@ export function ExpenseForm({ groupId, expenseId, receiptId, offline = false }: 
       <Card className="p-5 sm:p-6">
         <div className="flex items-center gap-2"><CircleDollarSign size={18} className="text-primary" aria-hidden="true" /><h3 className="text-base font-semibold">Tax and tip</h3></div>
         <p className="mt-1 text-xs leading-5 text-muted">Shared in proportion to each person’s item subtotal.</p>
-        <div className="mt-4 grid grid-cols-2 gap-3"><div><label className="mb-1.5 block text-xs font-semibold text-muted" htmlFor="expense-tax">Tax · USD</label><Input id="expense-tax" inputMode="decimal" value={tax} onChange={(event) => setTax(event.target.value)} placeholder="0.00" /></div><div><label className="mb-1.5 block text-xs font-semibold text-muted" htmlFor="expense-tip">Tip · USD</label><Input id="expense-tip" inputMode="decimal" value={tip} onChange={(event) => setTip(event.target.value)} placeholder="0.00" /></div></div>
+        <div className="mt-4 grid grid-cols-2 gap-3"><div><label className="mb-1.5 block text-xs font-semibold text-muted" htmlFor="expense-tax">Tax · {currency}</label><Input id="expense-tax" inputMode="decimal" value={tax} onChange={(event) => setTax(event.target.value)} placeholder={CURRENCY_DECIMALS[currency] === 0 ? "0" : "0.00"} /></div><div><label className="mb-1.5 block text-xs font-semibold text-muted" htmlFor="expense-tip">Tip · {currency}</label><Input id="expense-tip" inputMode="decimal" value={tip} onChange={(event) => setTip(event.target.value)} placeholder={CURRENCY_DECIMALS[currency] === 0 ? "0" : "0.00"} /></div></div>
         <div className="mt-5 rounded-xl bg-[#f7f9f6] p-4 text-sm">
-          <div className="flex justify-between text-muted"><span>Items subtotal</span><span>{formatCents(subtotalCents)}</span></div>
-          <div className="mt-2 flex justify-between text-muted"><span>Tax</span><span>{formatCents(taxCents ?? 0)}</span></div>
-          <div className="mt-2 flex justify-between text-muted"><span>Tip</span><span>{formatCents(tipCents ?? 0)}</span></div>
+          <div className="flex justify-between text-muted"><span>Items subtotal</span><span>{formatCents(subtotalCents, currency)}</span></div>
+          <div className="mt-2 flex justify-between text-muted"><span>Tax</span><span>{formatCents(taxCents ?? 0, currency)}</span></div>
+          <div className="mt-2 flex justify-between text-muted"><span>Tip</span><span>{formatCents(tipCents ?? 0, currency)}</span></div>
           <div className="my-3 border-t border-border" />
-          <div className="flex items-baseline justify-between"><span className="font-semibold">Receipt total</span><strong className="text-xl font-semibold tracking-[-0.04em]">{formatCents(subtotalCents + (taxCents ?? 0) + (tipCents ?? 0))}</strong></div>
-          {preview ? <div className="mt-4 border-t border-border pt-3"><p className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted">Each person’s share</p>{saved.members.map((member) => <div key={member.id} className="flex justify-between py-1 text-sm"><span>{member.name}</span><span className="font-semibold">{formatCents(preview.get(member.id) ?? 0)}</span></div>)}</div> : <p className="mt-3 text-xs leading-5 text-muted">Select people for each item to see the per-person split.</p>}
+          <div className="flex items-baseline justify-between"><span className="font-semibold">Receipt total</span><strong className="text-xl font-semibold tracking-[-0.04em]">{formatCents(subtotalCents + (taxCents ?? 0) + (tipCents ?? 0), currency)}</strong></div>
+          {preview ? <div className="mt-4 border-t border-border pt-3"><p className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted">Each person’s share</p>{saved.members.map((member) => <div key={member.id} className="flex justify-between py-1 text-sm"><span>{member.name}</span><span className="font-semibold">{formatCents(preview.get(member.id) ?? 0, currency)}</span></div>)}</div> : <p className="mt-3 text-xs leading-5 text-muted">Select people for each item to see the per-person split.</p>}
         </div>
       </Card>
 

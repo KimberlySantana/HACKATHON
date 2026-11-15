@@ -2,6 +2,7 @@ import OpenAI from "openai";
 import { NextResponse } from "next/server";
 import type { Receipt, ReceiptItem } from "@/types";
 import type { ReceiptReview, ReceiptScanResult } from "@/lib/receipt/extraction";
+import { isCurrencyCode, type CurrencyCode } from "@/lib/currency/types";
 
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
 const SUPPORTED_IMAGE_TYPES = new Set(["image/jpeg", "image/png", "image/webp", "image/gif"]);
@@ -16,12 +17,13 @@ const extractionSchema = {
       items: {
         type: "object",
         additionalProperties: false,
-        required: ["upload_slot", "detected_type", "merchant", "date", "items", "subtotal", "tax", "tip", "tip_status", "suggested_tip_percentages", "total", "confidence", "review_notes"],
+        required: ["upload_slot", "detected_type", "merchant", "date", "currency", "items", "subtotal", "tax", "tip", "tip_status", "suggested_tip_percentages", "total", "confidence", "review_notes"],
         properties: {
           upload_slot: { type: "string", enum: ["itemized", "payment"] },
           detected_type: { type: "string", enum: ["itemized", "payment", "combined", "unknown"] },
           merchant: { type: ["string", "null"] },
           date: { type: ["string", "null"] },
+          currency: { type: ["string", "null"] },
           items: {
             type: "array",
             items: {
@@ -79,6 +81,7 @@ type ExtractedDocument = {
   detected_type: "itemized" | "payment" | "combined" | "unknown";
   merchant: string | null;
   date: string | null;
+  currency: string | null;
   items: ExtractedItem[];
   subtotal: number | null;
   tax: number | null;
@@ -111,6 +114,7 @@ Receipt roles:
 
 Rules:
 - Never guess or invent text or numbers. Use null when a value is missing, cropped, or unreadable.
+- Identify currency only from a visible currency code, symbol, or unmistakable receipt evidence. Return an ISO code such as USD, EUR, CNY, or KRW when supported; otherwise return null. Never infer currency from the website language or upload slot.
 - Use an ISO date (YYYY-MM-DD) only when the date is legible.
 - Put purchased line items only in a document that visibly contains the itemized lines. The payment receipt usually has an empty items array; never duplicate item lines across documents.
 - Use tax and subtotal only when visibly printed. Keep them separate from tip and final total.
@@ -197,6 +201,14 @@ function mergeExtraction(extracted: ExtractedReceipt, imageCount: number): Recei
   const sourceForBill = itemizedDocument ?? paymentDocument;
   const merchant = sourceForBill?.merchant?.trim() ?? "";
   const date = sourceForBill?.date?.trim() ?? "";
+  const sourceCurrency = [itemizedDocument?.currency, paymentDocument?.currency]
+    .map((value) => value?.trim().toUpperCase())
+    .find((value) => value && isCurrencyCode(value)) ?? "";
+  const currency: CurrencyCode | null = isCurrencyCode(sourceCurrency) ? sourceCurrency : null;
+  const documentCurrencies = extracted.documents.map((document) => document.currency?.trim().toUpperCase()).filter(Boolean);
+  if (documentCurrencies.some((value) => !isCurrencyCode(value))) flag("currency", "Receipt currency is missing or unsupported. Confirm the original currency manually.");
+  if (new Set(documentCurrencies.filter(isCurrencyCode)).size > 1) flag("currency", "The two receipts show different currencies. Confirm the original currency before splitting.");
+  if (!currency) flag("currency", "Receipt currency is missing or unsupported. Confirm the original currency manually.");
   if (!merchant) flag("merchant", "Merchant name is missing or unreadable.");
   if (!date) flag("date", "Receipt date is missing or unreadable.");
   if (date && !/^\d{4}-\d{2}-\d{2}$/.test(date)) flag("date", "Date format could not be validated.");
@@ -288,6 +300,7 @@ function mergeExtraction(extracted: ExtractedReceipt, imageCount: number): Recei
     tax,
     tip,
     total,
+    currency,
     items,
   };
 

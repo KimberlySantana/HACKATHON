@@ -5,6 +5,7 @@ import { calculateReceiptSplit, stableReceiptUuid, validateReceiptForTransfer } 
 const review = { needsReview: false, needsConfirmation: false, confidence: "high", fields: [], notes: [] };
 const receipt = {
   id: "receipt-1", groupId: "", merchant: "Cafe", date: "2026-11-14", subtotal: 3.01, tax: 0.03, tip: 0.02, total: 3.06,
+  currency: "USD",
   items: [
     { id: "toast", name: "Toast", quantity: 1, unitPrice: 1.01, total: 1.01, assignedMemberIds: ["a", "b"] },
     { id: "coffee", name: "Coffee", quantity: 1, unitPrice: 2, total: 2, assignedMemberIds: ["b"] },

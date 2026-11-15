@@ -12,6 +12,10 @@ import { createReceiptTransfer, saveReceiptTransfer } from "@/lib/expenses/recei
 import { validateReceiptForTransfer } from "@/lib/splitting/receipt";
 import type { TranslationKey } from "@/lib/i18n/translations";
 import type { Receipt, ReceiptItem } from "@/types";
+import { formatMajorUnits } from "@/lib/currency/money";
+import { CURRENCY_CODES, CURRENCY_DECIMALS, CURRENCY_LABELS, type CurrencyCode } from "@/lib/currency/types";
+import { CurrencyAmount } from "@/components/currency";
+import { majorToMinorUnits } from "@/lib/currency/money";
 
 type ReceiptRole = "itemized" | "payment";
 
@@ -21,8 +25,6 @@ type SelectedFile = {
 };
 
 type SelectedFiles = Record<ReceiptRole, SelectedFile | null>;
-
-const money = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" });
 
 type Translator = (key: TranslationKey, values?: Record<string, string | number>) => string;
 
@@ -49,6 +51,8 @@ function localizeReviewNote(note: string, t: Translator) {
   if (note.startsWith("Merchant names differ")) return t("review.merchantMismatch");
   if (note.startsWith("Dates differ")) return t("review.dateMismatch");
   if (note.startsWith("Merchant name is missing")) return t("review.merchantMissing");
+  if (note.startsWith("The two receipts show different currencies")) return t("review.currencyConflict");
+  if (note.startsWith("Receipt currency is missing")) return t("review.currencyMissing");
   if (note.startsWith("Receipt date is missing")) return t("review.dateMissing");
   if (note.startsWith("Date format could not")) return t("review.dateInvalid");
   if (note.startsWith("No itemized receipt was detected")) return t("review.noItemized");
@@ -230,8 +234,14 @@ export default function ScanWorkspace() {
   }
 
   async function loadSampleReceipt() {
+    scanRequestId.current += 1;
+    setIsScanning(false);
+    setSelectedFiles({ itemized: null, payment: null });
     setIsLoading(true);
     setError(null);
+    setReview(null);
+    setTipManuallyEdited(false);
+    setReviewAcknowledged(false);
 
     try {
       const response = await fetch("/api/receipt");
@@ -372,6 +382,13 @@ export default function ScanWorkspace() {
                 <span className="text-[11px] font-extrabold uppercase tracking-[0.14em] text-[#99968d]">{t("scan.date")}</span>
                 <input type="date" value={receipt.date} aria-invalid={fieldNeedsReview("date")} onChange={(event) => updateReceipt({ date: event.target.value })} className={`mt-2 min-h-12 w-full rounded-2xl border px-4 text-sm font-bold outline-none transition duration-200 focus:border-[#ed795d] focus:bg-white focus:ring-4 focus:ring-[#ed795d]/10 ${fieldNeedsReview("date") ? "border-[#e6c66f] bg-[#fffaf0]" : "border-[#e7e3da] bg-[#fbfaf7]"}`} />
               </label>
+              <label className="block sm:col-span-2">
+                <span className="text-[11px] font-extrabold uppercase tracking-[0.14em] text-[#99968d]">{t("currency.receipt")}</span>
+                <select value={receipt.currency ?? ""} aria-invalid={fieldNeedsReview("currency")} onChange={(event) => updateReceipt({ currency: event.target.value ? event.target.value as CurrencyCode : null })} className={`mt-2 min-h-12 w-full rounded-2xl border px-4 text-sm font-bold outline-none transition focus:border-[#ed795d] focus:bg-white focus:ring-4 focus:ring-[#ed795d]/10 ${fieldNeedsReview("currency") ? "border-[#e6c66f] bg-[#fffaf0]" : "border-[#e7e3da] bg-[#fbfaf7]"}`}>
+                  <option value="">{t("currency.original")}</option>
+                  {CURRENCY_CODES.map((code) => <option key={code} value={code}>{CURRENCY_LABELS[code]}</option>)}
+                </select>
+              </label>
             </div>
 
             <div className="rounded-3xl border border-[#eeeae2] bg-[#fbfaf7] p-4 sm:p-5">
@@ -381,7 +398,7 @@ export default function ScanWorkspace() {
                   <div key={item.id} className="grid grid-cols-[minmax(0,1fr)_4.25rem_5rem_auto] items-center gap-2 border-b border-[#eae7df] pb-3 transition last:border-0 last:pb-0 sm:grid-cols-[minmax(0,1fr)_5rem_6rem_auto]">
                     <label className="min-w-0"><span className="sr-only">{t("scan.itemNameAria")}</span><input value={item.name} aria-invalid={fieldNeedsReview(`items[${index}].name`)} onChange={(event) => updateItem(item.id, { name: event.target.value })} className={`min-h-10 w-full min-w-0 rounded-xl border px-3 text-sm font-bold outline-none transition focus:border-[#ed795d] focus:ring-2 focus:ring-[#ed795d]/10 ${fieldNeedsReview(`items[${index}].name`) ? "border-[#e6c66f] bg-[#fffaf0]" : "border-transparent bg-white"}`} /></label>
                     <label><span className="sr-only">{t("scan.quantityAria", { name: item.name })}</span><input type="number" min="1" step="1" value={item.quantity} aria-invalid={fieldNeedsReview(`items[${index}].quantity`)} onChange={(event) => updateItem(item.id, { quantity: Math.max(1, Number(event.target.value) || 1) })} className={`min-h-10 w-full rounded-xl border px-2 text-center text-sm outline-none transition focus:border-[#ed795d] focus:ring-2 focus:ring-[#ed795d]/10 ${fieldNeedsReview(`items[${index}].quantity`) ? "border-[#e6c66f] bg-[#fffaf0]" : "border-transparent bg-white"}`} /></label>
-                    <label><span className="sr-only">{t("scan.priceAria", { name: item.name })}</span><input type="number" min="0" step="0.01" value={item.unitPrice} aria-invalid={fieldNeedsReview(`items[${index}].unit_price`)} onChange={(event) => updateItem(item.id, { unitPrice: Math.max(0, Number(event.target.value) || 0) })} className={`min-h-10 w-full rounded-xl border px-2 text-right text-sm font-bold outline-none transition focus:border-[#ed795d] focus:ring-2 focus:ring-[#ed795d]/10 ${fieldNeedsReview(`items[${index}].unit_price`) ? "border-[#e6c66f] bg-[#fffaf0]" : "border-transparent bg-white"}`} /></label>
+                    <label><span className="sr-only">{t("scan.priceAria", { name: item.name })}</span><input type="number" min="0" step={CURRENCY_DECIMALS[receipt.currency ?? "USD"] === 0 ? "1" : "0.01"} value={item.unitPrice} aria-invalid={fieldNeedsReview(`items[${index}].unit_price`)} onChange={(event) => updateItem(item.id, { unitPrice: Math.max(0, Number(event.target.value) || 0) })} className={`min-h-10 w-full rounded-xl border px-2 text-right text-sm font-bold outline-none transition focus:border-[#ed795d] focus:ring-2 focus:ring-[#ed795d]/10 ${fieldNeedsReview(`items[${index}].unit_price`) ? "border-[#e6c66f] bg-[#fffaf0]" : "border-transparent bg-white"}`} /></label>
                     <button type="button" onClick={() => removeItem(item.id)} className="grid h-9 w-9 place-items-center rounded-xl text-lg text-[#b6b2a8] transition hover:bg-white hover:text-[#ed795d]" aria-label={t("scan.removeItemAria", { name: item.name })}>×</button>
                   </div>
                 ))}
@@ -390,16 +407,16 @@ export default function ScanWorkspace() {
             </div>
 
             <div className="grid gap-3 sm:grid-cols-2">
-              <label className="flex items-center justify-between rounded-2xl border border-[#eeeae2] bg-[#f7f6f1] px-4 py-3 text-sm text-[#77766d] transition focus-within:border-[#ed795d] focus-within:bg-white"><span>{t("scan.tax")}</span><span className="flex items-center gap-1 font-bold text-[#25251f]"><span>$</span><input type="number" min="0" step="0.01" value={receipt.tax} aria-invalid={fieldNeedsReview("tax")} onChange={(event) => updateReceipt({ tax: Math.max(0, Number(event.target.value) || 0) })} className={`w-16 rounded px-1 text-right outline-none ${fieldNeedsReview("tax") ? "bg-[#fffaf0]" : "bg-transparent"}`} /></span></label>
-              <label className="flex items-center justify-between rounded-2xl border border-[#eeeae2] bg-[#f7f6f1] px-4 py-3 text-sm text-[#77766d] transition focus-within:border-[#ed795d] focus-within:bg-white"><span>{t("scan.tip")}</span><span className="flex items-center gap-1 font-bold text-[#25251f]"><span>$</span><input type="number" min="0" step="0.01" placeholder={t("scan.enter")} value={tipNeedsManualEntry ? "" : receipt.tip} aria-invalid={fieldNeedsReview("tip")} onChange={(event) => { setTipManuallyEdited(event.target.value.trim() !== ""); updateReceipt({ tip: event.target.value === "" ? 0 : Math.max(0, Number(event.target.value) || 0) }); }} className={`w-20 rounded px-1 text-right outline-none placeholder:text-[#aaa69c] ${fieldNeedsReview("tip") ? "bg-[#fffaf0]" : "bg-transparent"}`} /></span></label>
+              <label className="flex items-center justify-between rounded-2xl border border-[#eeeae2] bg-[#f7f6f1] px-4 py-3 text-sm text-[#77766d] transition focus-within:border-[#ed795d] focus-within:bg-white"><span>{t("scan.tax")}</span><span className="flex items-center gap-1 font-bold text-[#25251f]"><span>{receipt.currency ?? "?"}</span><input type="number" min="0" step={CURRENCY_DECIMALS[receipt.currency ?? "USD"] === 0 ? "1" : "0.01"} value={receipt.tax} aria-invalid={fieldNeedsReview("tax")} onChange={(event) => updateReceipt({ tax: Math.max(0, Number(event.target.value) || 0) })} className={`w-16 rounded px-1 text-right outline-none ${fieldNeedsReview("tax") ? "bg-[#fffaf0]" : "bg-transparent"}`} /></span></label>
+              <label className="flex items-center justify-between rounded-2xl border border-[#eeeae2] bg-[#f7f6f1] px-4 py-3 text-sm text-[#77766d] transition focus-within:border-[#ed795d] focus-within:bg-white"><span>{t("scan.tip")}</span><span className="flex items-center gap-1 font-bold text-[#25251f]"><span>{receipt.currency ?? "?"}</span><input type="number" min="0" step={CURRENCY_DECIMALS[receipt.currency ?? "USD"] === 0 ? "1" : "0.01"} placeholder={t("scan.enter")} value={tipNeedsManualEntry ? "" : receipt.tip} aria-invalid={fieldNeedsReview("tip")} onChange={(event) => { setTipManuallyEdited(event.target.value.trim() !== ""); updateReceipt({ tip: event.target.value === "" ? 0 : Math.max(0, Number(event.target.value) || 0) }); }} className={`w-20 rounded px-1 text-right outline-none placeholder:text-[#aaa69c] ${fieldNeedsReview("tip") ? "bg-[#fffaf0]" : "bg-transparent"}`} /></span></label>
             </div>
 
             <div className={`rounded-[1.65rem] p-5 text-white shadow-[0_16px_34px_rgba(37,37,31,0.16)] ${fieldNeedsReview("total") ? "border-2 border-[#e6c66f] bg-[#302d24]" : "bg-[#25251f]"}`}>
-              <div className="flex items-center justify-between text-sm text-[#c7c4bb]"><span>{t("scan.subtotal")}</span><span>{money.format(calculatedSubtotal)}</span></div>
-              <div className="mt-2 flex items-center justify-between text-sm text-[#c7c4bb]"><span>{t("scan.taxAndTip")}</span><span>{money.format(receipt.tax + receipt.tip)}</span></div>
+              <div className="flex items-center justify-between text-sm text-[#c7c4bb]"><span>{t("scan.subtotal")}</span><span>{formatMajorUnits(calculatedSubtotal, receipt.currency ?? "USD")}</span></div>
+              <div className="mt-2 flex items-center justify-between text-sm text-[#c7c4bb]"><span>{t("scan.taxAndTip")}</span><span>{formatMajorUnits(receipt.tax + receipt.tip, receipt.currency ?? "USD")}</span></div>
               <div className="my-4 border-t border-white/15" />
-              <div className="flex items-end justify-between"><span className="font-bold">{t("scan.chargedTotal")}</span><strong className="text-3xl font-extrabold tracking-tight">{money.format(receipt.total)}</strong></div>
-              {Math.abs(receipt.total - calculatedTotal) > 0.05 && <p className="mt-3 text-xs leading-5 text-[#f4d578]">{t("scan.calculatedFromFields", { amount: money.format(calculatedTotal) })}</p>}
+              <div className="flex items-end justify-between"><span className="font-bold">{t("scan.chargedTotal")}</span><strong className="text-right text-3xl font-extrabold tracking-tight"><CurrencyAmount amountMinor={majorToMinorUnits(receipt.total, receipt.currency ?? "USD")} originalCurrency={receipt.currency ?? "USD"} /></strong></div>
+              {Math.abs(receipt.total - calculatedTotal) > 0.05 && <p className="mt-3 text-xs leading-5 text-[#f4d578]">{t("scan.calculatedFromFields", { amount: formatMajorUnits(calculatedTotal, receipt.currency ?? "USD") })}</p>}
             </div>
 
             {(review?.needsReview || review?.needsConfirmation) && <label className="flex cursor-pointer items-start gap-3 rounded-2xl border border-[#e6c66f] bg-[#fffaf0] px-4 py-3 text-sm leading-6 text-[#77684d]">

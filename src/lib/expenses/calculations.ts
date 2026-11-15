@@ -1,4 +1,6 @@
 import type { ExpenseRecord } from "@/lib/expenses/types";
+import { formatMinorUnits } from "../currency/money.ts";
+import { CURRENCY_DECIMALS, type CurrencyCode } from "../currency/types.ts";
 
 export interface SettlementMember { id: string; name: string; }
 export interface Transfer { fromMemberId: string; toMemberId: string; amountCents: number; }
@@ -14,8 +16,23 @@ export function parseMoneyToCents(value: string): number | null {
   return Number.isSafeInteger(total) ? total : null;
 }
 
-export function formatCents(cents: number): string {
-  return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(cents / 100);
+export function parseMoneyToMinorUnits(value: string, currency: CurrencyCode): number | null {
+  const normalized = value.trim().replace(/^[^\d]+/, "");
+  const decimals = CURRENCY_DECIMALS[currency];
+  const match = new RegExp(`^(\\d+)(?:\\.(\\d{1,${decimals}}))?$`).exec(normalized);
+  if (!match) return null;
+  const whole = Number(match[1]);
+  const fraction = Number((match[2] ?? "").padEnd(decimals, "0"));
+  const total = whole * 10 ** decimals + fraction;
+  return Number.isSafeInteger(total) ? total : null;
+}
+
+export function formatCents(cents: number, currency: CurrencyCode = "USD", locale?: string): string {
+  return formatMinorUnits(cents, currency, locale);
+}
+
+export function expenseCurrency(expense: ExpenseRecord): CurrencyCode {
+  return expense.currency ?? "USD";
 }
 
 function splitEvenly(amountCents: number, memberIds: string[]) {
@@ -112,6 +129,8 @@ export function calculateExpenseShares(expense: ExpenseRecord, memberIds: string
 
 export function calculateSettlement(expenses: ExpenseRecord[], members: SettlementMember[]) {
   if (members.length === 0) throw new Error("A settlement needs at least one group member.");
+  const currencies = new Set(expenses.map(expenseCurrency));
+  if (currencies.size > 1) throw new Error("This group contains expenses in different currencies. Choose an explicit conversion policy before settling.");
   const memberIds = members.map((member) => member.id);
   const balances = new Map(memberIds.map((id) => [id, 0]));
   for (const expense of expenses) {

@@ -26,10 +26,10 @@ export function AuthPanel() {
     }
   }
 
-  if (loading) return <span role="status" className="text-xs font-medium text-muted">Checking sign-in…</span>;
+  if (loading) return <span role="status" className="rounded-full bg-lavender px-3 py-2 text-xs font-bold text-[#6e617b]">Checking sign-in…</span>;
 
   if (user) return <div className="flex min-w-0 items-center gap-2.5">
-    <span className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-[#eaf1ec] text-primary"><CircleUserRound size={17} aria-hidden="true" /></span>
+    <span className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-mint text-[#527b5b]"><CircleUserRound size={17} aria-hidden="true" /></span>
     <span className="hidden max-w-40 truncate text-xs font-medium text-muted sm:inline">{user.email}</span>
     <Button type="button" variant="ghost" size="sm" onClick={() => void signOut()}>Sign out</Button>
   </div>;
@@ -43,6 +43,6 @@ export function AuthPanel() {
       </div>
       <Button type="submit" size="sm" disabled={busy} className="h-10 shrink-0 px-3">{busy ? "Sending…" : <>Sign in <ArrowRight size={14} aria-hidden="true" /></>}</Button>
     </form>
-    {message && <p role="status" className="mt-1.5 flex items-center gap-1.5 text-xs text-muted">{message.startsWith("Check") && <CheckCircle2 size={13} className="text-success" aria-hidden="true" />}{message}</p>}
+    {message && <p role="status" className="brand-alert brand-alert-success mt-2 flex items-center gap-1.5 px-3 py-2 text-xs">{message.startsWith("Check") && <CheckCircle2 size={13} aria-hidden="true" />}{message}</p>}
   </div>;
 }

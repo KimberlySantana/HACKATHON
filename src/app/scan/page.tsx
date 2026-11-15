@@ -3,13 +3,14 @@
 import Link from "next/link";
 import { SplitzyMark } from "@/components/splitzy-mark";
 import { LanguageSwitcher, useLanguage } from "@/components/i18n";
+import { CurrencySwitcher } from "@/components/currency";
 import ScanWorkspace from "./scan-workspace";
 
 export default function ScanPage() {
   const { t } = useLanguage();
 
   return (
-    <main className="scan-page min-h-screen overflow-hidden bg-[#fbfaf7] text-[#25251f]">
+    <main className="brand-page scan-page min-h-screen overflow-hidden text-[#25251f]">
       <header className="relative z-10 mx-auto flex max-w-6xl items-center justify-between px-5 py-5 sm:px-8 sm:py-7">
         <Link href="/" aria-label={t("navigation.homeAria")} className="group flex items-center gap-2.5">
           <SplitzyMark />
@@ -19,7 +20,7 @@ export default function ScanPage() {
           <Link href="/" className="group rounded-full px-3 py-2 text-sm font-bold text-[#ed795d] transition hover:bg-[#fff0eb] hover:text-[#d95f45]">
             {t("navigation.backHome")} <span aria-hidden="true" className="inline-block transition group-hover:translate-x-0.5 group-hover:-translate-y-0.5">↗</span>
           </Link>
-          <LanguageSwitcher />
+          <LanguageSwitcher /><CurrencySwitcher />
         </div>
       </header>
 

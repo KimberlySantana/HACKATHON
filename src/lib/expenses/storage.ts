@@ -1,4 +1,5 @@
 import type { ExpenseRecord } from "@/lib/expenses/types";
+import { isCurrencyCode } from "@/lib/currency/types";
 
 export const EXPENSES_STORAGE_KEY = "splitzy.expenses.v1";
 export const EXPENSES_UPDATED_EVENT = "splitzy:expenses-updated";
@@ -12,7 +13,7 @@ function isExpense(value: unknown): value is ExpenseRecord {
   return typeof value.id === "string" && typeof value.groupId === "string" &&
     typeof value.description === "string" && typeof value.paidByMemberId === "string" &&
     Number.isSafeInteger(value.taxCents) && Number(value.taxCents) >= 0 && Number.isSafeInteger(value.tipCents) && Number(value.tipCents) >= 0 &&
-    typeof value.createdAt === "string" && value.items.every((item) => isRecord(item) &&
+    typeof value.createdAt === "string" && (value.currency === undefined || isCurrencyCode(value.currency)) && value.items.every((item) => isRecord(item) &&
       typeof item.id === "string" && typeof item.name === "string" && Number.isInteger(item.quantity) && Number(item.quantity) > 0 &&
       Number.isSafeInteger(item.unitPriceCents) && Number(item.unitPriceCents) >= 0 && Array.isArray(item.assignedMemberIds) &&
       item.assignedMemberIds.every((id) => typeof id === "string") &&
