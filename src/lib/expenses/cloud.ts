@@ -1,6 +1,13 @@
 import { calculateItemSharesCents } from "./calculations.ts";
 import type { ExpenseRecord } from "./types.ts";
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { isCurrencyCode } from "../currency/types.ts";
+
+export const LEGACY_CURRENCY_SCHEMA_ERROR = "Cloud expense currency support needs the currency migration. Apply the pending currency migration, then try again.";
+
+function isMissingCurrencyColumn(error: { code?: string; message?: string }) {
+  return error.code === "42703" || /column .*currency.* does not exist/i.test(error.message ?? "");
+}
 
 type CloudRow = Record<string, unknown>;
 
@@ -15,12 +22,19 @@ function text(value: unknown, field: string): string {
   return value;
 }
 
+function expenseCurrency(value: unknown) {
+  if (value === undefined) return "USD" as const;
+  if (!isCurrencyCode(value)) throw new Error("Supabase returned an unsupported expense currency.");
+  return value;
+}
+
 export function toCloudExpensePayload(expense: ExpenseRecord, groupMemberIds: string[]) {
   return {
     id: expense.id,
     group_id: expense.groupId,
     paid_by_member_id: expense.paidByMemberId,
     description: expense.description,
+    currency: expense.currency ?? "USD",
     tax_cents: expense.taxCents,
     tip_cents: expense.tipCents,
     created_at: expense.createdAt,
@@ -77,6 +91,7 @@ export function mapCloudExpenseRows(
       id,
       groupId: text(row.group_id, "expense group_id"),
       description: text(row.description, "expense description"),
+      currency: expenseCurrency(row.currency),
       paidByMemberId: text(row.paid_by_member_id, "expense paid_by_member_id"),
       taxCents: cents(row.tax_cents),
       tipCents: cents(row.tip_cents),
@@ -87,11 +102,20 @@ export function mapCloudExpenseRows(
 }
 
 export async function loadCloudExpenses(client: SupabaseClient, groupId: string, memberIds: string[]) {
-  const { data: expenseRows, error: expenseError } = await client
+  const initial = await client
     .from("expenses")
-    .select("id,group_id,description,paid_by_member_id,tax_cents,tip_cents,created_at")
+    .select("id,group_id,description,paid_by_member_id,tax_cents,tip_cents,currency,created_at")
     .eq("group_id", groupId)
     .order("created_at", { ascending: false });
+  let expenseRows: CloudRow[] | null = initial.data;
+  let expenseError = initial.error;
+  if (expenseError) {
+    if (!isMissingCurrencyColumn(expenseError)) throw expenseError;
+    const legacy = await client.from("expenses").select("id,group_id,description,paid_by_member_id,tax_cents,tip_cents,created_at").eq("group_id", groupId).order("created_at", { ascending: false });
+    if (legacy.error) throw legacy.error;
+    expenseRows = legacy.data;
+    expenseError = null;
+  }
   if (expenseError) throw expenseError;
   if (!expenseRows?.length) return [];
 
@@ -118,6 +142,11 @@ export async function loadCloudExpenses(client: SupabaseClient, groupId: string,
 }
 
 export async function saveCloudExpense(client: SupabaseClient, expense: ExpenseRecord, memberIds: string[], allowUpdate = true) {
+  if ((expense.currency ?? "USD") !== "USD") {
+    const { error: schemaError } = await client.from("expenses").select("currency").limit(1);
+    if (schemaError && isMissingCurrencyColumn(schemaError)) throw new Error(LEGACY_CURRENCY_SCHEMA_ERROR);
+    if (schemaError) throw schemaError;
+  }
   const { data, error } = await client.rpc("save_expense", {
     p_expense: toCloudExpensePayload(expense, memberIds),
     p_allow_update: allowUpdate,

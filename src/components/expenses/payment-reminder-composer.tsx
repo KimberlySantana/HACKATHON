@@ -4,10 +4,12 @@ import { useEffect, useId, useRef, useState } from "react";
 import { Copy, Send, Share2 } from "lucide-react";
 import { formatCents, type Transfer } from "@/lib/expenses/calculations";
 import { buildPaymentReminder, type ReminderLanguage, type ReminderTone } from "@/lib/expenses/payment-reminders";
+import type { CurrencyCode } from "@/lib/currency/types";
 
-export function PaymentReminderComposer({ groupName, transfer, fromName, toName }: {
+export function PaymentReminderComposer({ groupName, transfer, currency = "USD", fromName, toName }: {
   groupName: string;
   transfer: Transfer;
+  currency?: CurrencyCode;
   fromName: string;
   toName: string;
 }) {
@@ -16,18 +18,18 @@ export function PaymentReminderComposer({ groupName, transfer, fromName, toName 
   const [open, setOpen] = useState(false);
   const [tone, setTone] = useState<ReminderTone>("friendly");
   const [language, setLanguage] = useState<ReminderLanguage>("en");
-  const [message, setMessage] = useState(() => buildPaymentReminder({ groupName, transfer, fromName, toName, tone: "friendly", language: "en" }));
+  const [message, setMessage] = useState(() => buildPaymentReminder({ groupName, transfer, fromName, toName, tone: "friendly", language: "en", currency }));
   const [notice, setNotice] = useState("");
 
   useEffect(() => {
-    setMessage(buildPaymentReminder({ groupName, transfer, fromName, toName, tone, language }));
+    setMessage(buildPaymentReminder({ groupName, transfer, fromName, toName, tone, language, currency }));
     setNotice("");
-  }, [groupName, transfer.amountCents, fromName, toName, tone, language]);
+  }, [groupName, transfer.amountCents, fromName, toName, tone, language, currency]);
 
   function updateTemplate(nextTone: ReminderTone, nextLanguage: ReminderLanguage) {
     setTone(nextTone);
     setLanguage(nextLanguage);
-    setMessage(buildPaymentReminder({ groupName, transfer, fromName, toName, tone: nextTone, language: nextLanguage }));
+    setMessage(buildPaymentReminder({ groupName, transfer, fromName, toName, tone: nextTone, language: nextLanguage, currency }));
     setNotice("");
   }
 
@@ -70,7 +72,7 @@ export function PaymentReminderComposer({ groupName, transfer, fromName, toName 
         <div><dt className="text-xs font-semibold text-muted">Request from</dt><dd className="mt-1 font-bold">{fromName}</dd></div>
         <div><dt className="text-xs font-semibold text-muted">Payment to</dt><dd className="mt-1 font-bold">{toName}</dd></div>
         <div><dt className="text-xs font-semibold text-muted">Group</dt><dd className="mt-1 font-medium">{groupName}</dd></div>
-        <div><dt className="text-xs font-semibold text-muted">Amount · USD</dt><dd className="mt-1 font-bold">{formatCents(transfer.amountCents)}</dd></div>
+        <div><dt className="text-xs font-semibold text-muted">Amount · {currency}</dt><dd className="mt-1 font-bold">{formatCents(transfer.amountCents, currency)}</dd></div>
       </dl>
       <div className="mt-4 grid gap-3 sm:grid-cols-2">
         <label className="text-xs font-semibold text-muted">Tone<select value={tone} onChange={(event) => updateTemplate(event.target.value as ReminderTone, language)} className="mt-1 h-11 w-full rounded-lg border border-border bg-white px-3 text-sm text-foreground focus:border-primary focus:outline-none focus:ring-4 focus:ring-primary/10"><option value="friendly">Friendly</option><option value="polite">Polite</option><option value="direct">Direct</option><option value="funny">Funny</option></select></label>

@@ -5,7 +5,8 @@ import { useEffect, useRef, useState, type MouseEvent } from "react";
 import { MoreHorizontal } from "lucide-react";
 import { useSavedGroups } from "@/components/groups/use-saved-groups";
 import { useGroupExpenses, type ExpenseStorageMode } from "@/components/expenses/use-group-expenses";
-import { formatCents, getExpenseSubtotalCents } from "@/lib/expenses/calculations";
+import { expenseCurrency, getExpenseSubtotalCents } from "@/lib/expenses/calculations";
+import { CurrencyAmount } from "@/components/currency";
 import type { ExpenseRecord } from "@/lib/expenses/types";
 import { FormErrorToast } from "@/components/ui/form-error-toast";
 import { Button } from "@/components/ui/button";
@@ -61,7 +62,7 @@ export function GroupExpenseOverview({ groupId }: { groupId: string }) {
       {store.expenses.length > 0 && <ul className="mt-3 space-y-2.5">
         {store.expenses.map((expense) => <li key={expense.id} className="flex items-center justify-between gap-3 rounded-xl border border-[#eeeae2] bg-[#fcfdfb] p-3">
           <div className="min-w-0"><p className="truncate text-sm font-semibold">{expense.description}</p><p className="mt-1 text-xs text-[#77766d]">{expense.items.length} {expense.items.length === 1 ? "item" : "items"}</p></div>
-          <div className="flex shrink-0 items-center gap-2"><strong className="text-sm">{formatCents(getExpenseSubtotalCents(expense) + expense.taxCents + expense.tipCents)}</strong>
+          <div className="flex shrink-0 items-center gap-2"><strong className="text-sm"><CurrencyAmount amountMinor={getExpenseSubtotalCents(expense) + expense.taxCents + expense.tipCents} originalCurrency={expenseCurrency(expense)} /></strong>
             <details className="relative">
               <summary aria-label={`More actions for ${expense.description}`} title="More actions" className="grid h-11 w-11 cursor-pointer list-none place-items-center rounded-lg text-[#77766d] hover:bg-[#f0f2ed] focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-primary/20"><MoreHorizontal size={20} aria-hidden="true" /></summary>
               <div className="absolute right-0 top-full z-20 mt-1 w-44 rounded-xl border border-[#e7e2d8] bg-white p-1.5 shadow-lg">

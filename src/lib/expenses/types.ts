@@ -1,4 +1,6 @@
-/** Browser-only expense record. Amounts are always integer cents. */
+import type { CurrencyCode } from "../currency/types.ts";
+
+/** Browser-only expense record. Amounts are integer minor units in the receipt currency. */
 export interface ExpenseItemRecord {
   id: string;
   name: string;
@@ -19,5 +21,7 @@ export interface ExpenseRecord {
   items: ExpenseItemRecord[];
   taxCents: number;
   tipCents: number;
+  /** Legacy expenses without this field are USD. */
+  currency?: CurrencyCode;
   createdAt: string;
 }

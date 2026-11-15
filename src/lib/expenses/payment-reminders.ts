@@ -1,4 +1,5 @@
 import { formatCents, type Transfer } from "./calculations.ts";
+import type { CurrencyCode } from "../currency/types.ts";
 
 export type ReminderTone = "friendly" | "polite" | "direct" | "funny";
 export type ReminderLanguage = "en" | "zh-TW";
@@ -22,6 +23,7 @@ export function buildPaymentReminder({
   toName,
   tone,
   language,
+  currency = "USD",
 }: {
   groupName: string;
   transfer: Transfer;
@@ -29,8 +31,9 @@ export function buildPaymentReminder({
   toName: string;
   tone: ReminderTone;
   language: ReminderLanguage;
+  currency?: CurrencyCode;
 }) {
-  const amount = formatCents(transfer.amountCents);
+  const amount = formatCents(transfer.amountCents, currency);
   if (language === "zh-TW") {
     const messages: Record<ReminderTone, string> = {
       friendly: `嗨 ${fromName}！有空時可以請你把 ${amount} 轉給 ${toName} 嗎？這是「${groupName}」的分攤款，謝謝你！`,

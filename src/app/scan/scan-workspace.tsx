@@ -6,12 +6,16 @@ import Image from "next/image";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useLanguage } from "@/components/i18n";
-import { useAuth } from "@/components/groups/auth-provider";
+import { AuthSessionInvalidError, useAuth } from "@/components/groups/auth-provider";
 import { useSavedGroups } from "@/components/groups/use-saved-groups";
 import { createReceiptExpenseDraft, receiptDraftStorageKey } from "@/lib/receipt/draft";
+import { getScanErrorTranslationKey } from "@/lib/receipt/scan-errors";
 import { MAX_SCAN_FILE_BYTES, MAX_SCAN_TOTAL_FILE_BYTES } from "@/lib/receipt/upload-validation";
 import { groupExpenseHref } from "@/lib/groups/form";
 import type { ReceiptReview, ReceiptScanResult } from "@/lib/receipt/extraction";
+import { CURRENCY_CODES, CURRENCY_DECIMALS, CURRENCY_LABELS, type CurrencyCode } from "@/lib/currency/types";
+import { CurrencyAmount } from "@/components/currency";
+import { parseMoneyToMinorUnits } from "@/lib/expenses/calculations";
 import type { TranslationKey } from "@/lib/i18n/translations";
 import type { Receipt, ReceiptItem } from "@/types";
 
@@ -24,7 +28,9 @@ type SelectedFile = {
 
 type SelectedFiles = Record<ReceiptRole, SelectedFile | null>;
 
-const money = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" });
+function formatMoney(value: number, currency: CurrencyCode) {
+  return new Intl.NumberFormat(undefined, { style: "currency", currency, maximumFractionDigits: CURRENCY_DECIMALS[currency] }).format(value);
+}
 const MAX_ORIGINAL_IMAGE_BYTES = 16 * 1024 * 1024;
 
 type Translator = (key: TranslationKey, values?: Record<string, string | number>) => string;
@@ -49,7 +55,9 @@ async function compressImage(file: File) {
   }
 }
 
-function localizeServerError(message: string, t: Translator) {
+function localizeServerError(message: string, t: Translator, code?: string) {
+  const translationKey = getScanErrorTranslationKey(code);
+  if (translationKey) return t(translationKey);
   if (message.includes("not configured")) return t("error.notConfigured");
   if (message.includes("Upload an itemized receipt")) return t("error.noUploads");
   if (message.includes("must be a JPEG")) {
@@ -111,11 +119,12 @@ function localizeReviewNote(note: string, t: Translator) {
 export default function ScanWorkspace({ initialGroupId }: { initialGroupId: string }) {
   const router = useRouter();
   const { t } = useLanguage();
-  const { user, loading: authLoading } = useAuth();
+  const { user, loading: authLoading, getAccessToken } = useAuth();
   const { groups, loading: groupsLoading } = useSavedGroups();
   const [groupId, setGroupId] = useState(initialGroupId);
   const [selectedFiles, setSelectedFiles] = useState<SelectedFiles>({ itemized: null, payment: null });
   const [receipt, setReceipt] = useState<Receipt | null>(null);
+  const [receiptCurrency, setReceiptCurrency] = useState<CurrencyCode>("USD");
   const [review, setReview] = useState<ReceiptReview | null>(null);
   const [isDragging, setIsDragging] = useState<ReceiptRole | null>(null);
   const [isLoading, setIsLoading] = useState(false);
@@ -126,6 +135,8 @@ export default function ScanWorkspace({ initialGroupId }: { initialGroupId: stri
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const scanRequestId = useRef(0);
+  const photoInputRefs = useRef<Partial<Record<ReceiptRole, HTMLInputElement | null>>>({});
+  const uploadInputRefs = useRef<Partial<Record<ReceiptRole, HTMLInputElement | null>>>({});
 
   useEffect(() => setGroupId(initialGroupId), [initialGroupId]);
 
@@ -163,13 +174,12 @@ export default function ScanWorkspace({ initialGroupId }: { initialGroupId: stri
     if (uploads.length === 0) return;
     if (!groupId) { setError("Choose a group before scanning a receipt."); return; }
     if (!activeGroup || groupsLoading) { setError("Choose a group that is available in the current account."); return; }
-    if (!user) { setError("Sign in before using AI receipt scanning. The sample receipt is available for local preview."); return; }
-
     const requestId = scanRequestId.current + 1;
     scanRequestId.current = requestId;
     setIsScanning(true);
     setReceipt(null);
     setReview(null);
+    setReceiptCurrency("USD");
     setTipManuallyEdited(false);
     setReceiptReviewed(false);
     setTransactionConfirmed(false);
@@ -177,13 +187,28 @@ export default function ScanWorkspace({ initialGroupId }: { initialGroupId: stri
     setNotice(t("scan.readingReceipts", { receipts: uploads.length === 2 ? t("scan.bothReceipts") : t("scan.yourReceipt") }));
 
     try {
+      let accessToken: string | null;
+      try {
+        accessToken = await getAccessToken();
+      } catch (authError) {
+        if (authError instanceof AuthSessionInvalidError) throw new Error(t("error.authInvalid"));
+        throw new Error(t("error.authUnavailable"));
+      }
+      if (!accessToken) throw new Error(t("error.notAuthenticated"));
+
       const formData = new FormData();
+      formData.append("groupId", groupId);
       if (files.itemized) formData.append("itemizedFile", files.itemized.file);
       if (files.payment) formData.append("paymentFile", files.payment.file);
 
-      const response = await fetch("/api/receipt/scan", { method: "POST", body: formData });
-      const payload = (await response.json().catch(() => ({}))) as Partial<ReceiptScanResult> & { error?: string };
-      if (!response.ok) throw new Error(localizeServerError(payload.error || t("error.recognitionFailed"), t));
+      const response = await fetch("/api/receipt/scan", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { Authorization: `Bearer ${accessToken}` },
+        body: formData,
+      });
+      const payload = (await response.json().catch(() => ({}))) as Partial<ReceiptScanResult> & { error?: string; code?: string };
+      if (!response.ok) throw new Error(localizeServerError(payload.error || t("error.recognitionFailed"), t, payload.code));
       if (!payload.receipt || !payload.review) throw new Error(t("error.incompleteResponse"));
       if (requestId !== scanRequestId.current) return;
 
@@ -202,7 +227,7 @@ export default function ScanWorkspace({ initialGroupId }: { initialGroupId: stri
       if (requestId !== scanRequestId.current) return;
       setReceipt(null);
       setReview(null);
-      setError(scanError instanceof Error ? scanError.message : t("error.tryAgain"));
+      setError(scanError instanceof TypeError ? t("error.network") : scanError instanceof Error ? scanError.message : t("error.tryAgain"));
       setNotice(null);
     } finally {
       if (requestId === scanRequestId.current) setIsScanning(false);
@@ -211,7 +236,7 @@ export default function ScanWorkspace({ initialGroupId }: { initialGroupId: stri
 
   async function handleFile(role: ReceiptRole, file: File) {
     if (!new Set(["image/jpeg", "image/png", "image/webp"]).has(file.type)) {
-      setError(t("error.invalidImage"));
+      setError(t("error.unsupportedImage"));
       return;
     }
 
@@ -220,8 +245,7 @@ export default function ScanWorkspace({ initialGroupId }: { initialGroupId: stri
       return;
     }
 
-    if (authLoading || groupsLoading) { setError("Wait for sign-in and group status to finish loading, then try again."); return; }
-    if (!user) { setError("Sign in before using AI receipt scanning. The sample receipt is available for local preview."); return; }
+    if (groupsLoading) { setError("Wait for group status to finish loading, then try again."); return; }
     if (!groupId || !activeGroup) { setError("Choose a group that is available in the current account before uploading."); return; }
 
     setIsLoading(true);
@@ -243,7 +267,7 @@ export default function ScanWorkspace({ initialGroupId }: { initialGroupId: stri
       setReview(null);
       setReceiptReviewed(false);
       setTransactionConfirmed(false);
-      void scanReceipts(nextFiles);
+      setNotice(t("scan.readyToScan"));
     } catch (uploadError) {
       setError(uploadError instanceof Error ? uploadError.message : t("error.tryAgain"));
     } finally {
@@ -257,7 +281,7 @@ export default function ScanWorkspace({ initialGroupId }: { initialGroupId: stri
     event.target.value = "";
   }
 
-  function handleDrop(role: ReceiptRole, event: DragEvent<HTMLLabelElement>) {
+  function handleDrop(role: ReceiptRole, event: DragEvent<HTMLDivElement>) {
     event.preventDefault();
     setIsDragging(null);
     const file = event.dataTransfer.files[0];
@@ -277,7 +301,7 @@ export default function ScanWorkspace({ initialGroupId }: { initialGroupId: stri
     setTransactionConfirmed(false);
     setError(null);
     if (nextFiles.itemized || nextFiles.payment) {
-      void scanReceipts(nextFiles);
+      setNotice(t("scan.readyToScan"));
     } else {
       scanRequestId.current += 1;
       setIsScanning(false);
@@ -294,6 +318,7 @@ export default function ScanWorkspace({ initialGroupId }: { initialGroupId: stri
       if (!response.ok) throw new Error(t("error.demoLoad"));
       const sample = (await response.json()) as Receipt;
       setReceipt(sample);
+      setReceiptCurrency("USD");
       setReview(null);
       setTipManuallyEdited(false);
       setReceiptReviewed(false);
@@ -341,11 +366,11 @@ export default function ScanWorkspace({ initialGroupId }: { initialGroupId: stri
     setError(null);
     if (!receipt) { setError("Scan or load a receipt before continuing."); return; }
     if (!groupId || !activeGroup) { setError("Choose a group that is available in this account before continuing."); return; }
-    if (tipNeedsManualEntry) { setError("Confirm the actual tip amount or enter $0.00 before continuing."); return; }
+    if (tipNeedsManualEntry) { setError(`Confirm the actual tip amount or enter ${formatMoney(0, receiptCurrency)} before continuing.`); return; }
     if (!receiptReviewed) { setError("Review the extracted items and amounts, then confirm before continuing."); return; }
     if (review?.needsConfirmation && !transactionConfirmed) { setError("Confirm that the uploaded receipts belong to the same transaction before continuing."); return; }
     try {
-      const draft = createReceiptExpenseDraft(receipt, groupId);
+      const draft = createReceiptExpenseDraft(receipt, groupId, new Date(), receiptCurrency);
       window.sessionStorage.setItem(receiptDraftStorageKey(groupId), JSON.stringify(draft));
       router.push(`${groupExpenseHref(groupId)}?fromScan=1`);
     } catch (handoffError) {
@@ -375,21 +400,25 @@ export default function ScanWorkspace({ initialGroupId }: { initialGroupId: stri
               const selectedFile = selectedFiles[slot.role];
               return (
                 <div key={slot.role} className="min-w-0">
-                  <label
-                    htmlFor={`${slot.role}-receipt-upload`}
+                  <div
                     onDragEnter={() => setIsDragging(slot.role)}
                     onDragOver={(event) => event.preventDefault()}
                     onDragLeave={() => setIsDragging(null)}
                     onDrop={(event) => handleDrop(slot.role, event)}
-                    className={`group relative flex min-h-52 cursor-pointer flex-col items-center justify-center overflow-hidden rounded-[1.65rem] border-2 border-dashed px-4 text-center transition duration-300 hover:-translate-y-0.5 hover:shadow-[0_14px_30px_rgba(76,67,51,0.08)] focus-within:ring-4 focus-within:ring-[#ed795d]/10 ${isDragging === slot.role ? "border-[#ed795d] bg-[#fff5f1] shadow-[0_14px_30px_rgba(237,121,93,0.12)]" : "border-[#dedbd1] bg-[#fbfaf7] hover:border-[#ed795d] hover:bg-[#fffaf7]"}`}
+                    className={`group relative flex min-h-40 flex-col items-center justify-center overflow-hidden rounded-[1.65rem] border-2 border-dashed px-4 text-center transition duration-300 ${isDragging === slot.role ? "border-[#ed795d] bg-[#fff5f1] shadow-[0_14px_30px_rgba(237,121,93,0.12)]" : "border-[#dedbd1] bg-[#fbfaf7]"}`}
                   >
                     <span className="pointer-events-none absolute -right-8 -top-8 h-24 w-24 rounded-full bg-[#f7d7c9]/40 transition duration-300 group-hover:scale-125" aria-hidden="true" />
                     {selectedFile ? <img src={selectedFile.previewUrl} alt={`${slot.label} preview`} className="relative h-16 w-16 rounded-2xl object-cover shadow-[0_8px_18px_rgba(76,67,51,0.14)]" /> : <span className="relative grid h-14 w-14 place-items-center rounded-2xl bg-white text-xl text-[#ed795d] shadow-[0_8px_18px_rgba(76,67,51,0.08)] transition duration-300 group-hover:rotate-3 group-hover:scale-105" aria-hidden="true">↑</span>}
                     <span className="relative mt-4 text-sm font-extrabold tracking-[-0.01em]">{slot.label}</span>
                     <span className="relative mt-1 text-xs leading-5 text-[#929087]">{selectedFile ? `${(selectedFile.file.size / 1024 / 1024).toFixed(1)} MB · ${isScanning ? t("scan.analyzingReceipts") : t("scan.readyToReview")}` : slot.description}</span>
-                    {!selectedFile && <span className="relative mt-3 rounded-full bg-white px-3 py-1.5 text-[10px] font-extrabold uppercase tracking-[0.12em] text-[#a19e93] shadow-sm transition group-hover:text-[#ed795d]">{t("scan.chooseImage")}</span>}
-                    <input id={`${slot.role}-receipt-upload`} type="file" accept="image/jpeg,image/png,image/webp" onChange={(event) => handleFileChange(slot.role, event)} className="sr-only" />
-                  </label>
+                    {!selectedFile && <span className="relative mt-3 text-xs font-semibold text-[#a19e93]">{t("scan.chooseImage")}</span>}
+                  </div>
+                  <input ref={(element) => { photoInputRefs.current[slot.role] = element; }} id={`${slot.role}-camera-input`} type="file" accept="image/*" capture="environment" onChange={(event) => handleFileChange(slot.role, event)} className="sr-only" />
+                  <input ref={(element) => { uploadInputRefs.current[slot.role] = element; }} id={`${slot.role}-upload-input`} type="file" accept="image/*" onChange={(event) => handleFileChange(slot.role, event)} className="sr-only" />
+                  <div className="mt-3 grid grid-cols-2 gap-2">
+                    <button type="button" onClick={() => photoInputRefs.current[slot.role]?.click()} disabled={isLoading || isScanning} className="min-h-11 rounded-xl border border-border bg-white px-2 text-sm font-semibold text-primary transition hover:bg-surface-muted focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary disabled:opacity-60" aria-label={`${t("scan.takePhoto")} — ${slot.label}`}>{t("scan.takePhoto")}</button>
+                    <button type="button" onClick={() => uploadInputRefs.current[slot.role]?.click()} disabled={isLoading || isScanning} className="min-h-11 rounded-xl border border-border bg-white px-2 text-sm font-semibold text-primary transition hover:bg-surface-muted focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary disabled:opacity-60" aria-label={`${t("scan.uploadImage")} — ${slot.label}`}>{t("scan.uploadImage")}</button>
+                  </div>
                   {selectedFile && <button type="button" onClick={() => removeFile(slot.role)} aria-label={`Remove ${slot.label}`} className="mt-2 min-h-10 w-full rounded-xl py-1.5 text-xs font-bold text-[#99968d] transition hover:bg-[#fff5f1] hover:text-[#ed795d]">{t("scan.remove", { label: slot.label })}</button>}
                 </div>
               );
@@ -397,6 +426,7 @@ export default function ScanWorkspace({ initialGroupId }: { initialGroupId: stri
           </div>
 
           <p className="mt-4 text-center text-xs leading-5 text-[#929087]">JPEG, PNG, or WEBP · each image is compressed to fit the 4 MB secure request limit.</p>
+          <p className="mt-2 text-center text-xs leading-5 text-[#929087]">{t("scan.cameraFallback")}</p>
           {!user && !authLoading && <p role="status" className="mt-4 rounded-xl border border-[#eadbb7] bg-warning-soft px-3.5 py-3 text-sm leading-5 text-[#75511e]">Sign in with the account that owns this group to use paid receipt scanning. You can still load the local sample.</p>}
           {!activeGroup && !groupsLoading && groupId && <p role="alert" className="mt-4 rounded-xl border border-[#f0d3cd] bg-danger-soft px-3.5 py-3 text-sm leading-5 text-danger">This group is unavailable to the current account. Return to Groups and open the group again.</p>}
 
@@ -410,7 +440,10 @@ export default function ScanWorkspace({ initialGroupId }: { initialGroupId: stri
             {isLoading ? t("scan.loadingDemo") : isScanning ? t("scan.analyzingReceipts") : t("scan.trySample")}
             {!isLoading && !isScanning && <span aria-hidden="true">↗</span>}
           </button>
-          {uploadCount > 0 && !isScanning && <button type="button" onClick={() => void scanReceipts(selectedFiles)} disabled={isLoading || isScanning} className="mt-2 min-h-10 w-full rounded-xl px-3 text-xs font-semibold text-primary hover:bg-[#f3f7f3] disabled:opacity-50">Rescan selected images</button>}
+          {uploadCount > 0 && !isScanning && <div className="mt-3">
+            <p className="mb-2 text-center text-xs text-muted">{t("scan.scanUsageNote")}</p>
+            <button type="button" onClick={() => void scanReceipts(selectedFiles)} disabled={isLoading || isScanning} className="min-h-12 w-full rounded-xl bg-primary px-4 text-sm font-bold text-white transition hover:bg-primary-hover focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary disabled:opacity-50">{receipt ? t("scan.rescanWithAI") : t("scan.scanWithAI")}</button>
+          </div>}
 
           <p className="mt-4 text-center text-xs leading-5 text-[#a19e93]">{t("scan.imagesNotice")}</p>
         </section>
@@ -455,6 +488,13 @@ export default function ScanWorkspace({ initialGroupId }: { initialGroupId: stri
                 <span className="text-[11px] font-extrabold uppercase tracking-[0.14em] text-[#99968d]">{t("scan.date")}</span>
                 <input type="date" value={receipt.date} aria-invalid={fieldNeedsReview("date")} onChange={(event) => updateReceipt({ date: event.target.value })} className={`mt-2 min-h-12 w-full rounded-2xl border px-4 text-sm font-bold outline-none transition duration-200 focus:border-[#ed795d] focus:bg-white focus:ring-4 focus:ring-[#ed795d]/10 ${fieldNeedsReview("date") ? "border-[#e6c66f] bg-[#fffaf0]" : "border-[#e7e3da] bg-[#fbfaf7]"}`} />
               </label>
+              <label className="block sm:col-span-2">
+                <span className="text-[11px] font-extrabold uppercase tracking-[0.14em] text-[#99968d]">{t("currency.receipt")}</span>
+                <select value={receiptCurrency} onChange={(event) => { setReceiptCurrency(event.target.value as CurrencyCode); setReceiptReviewed(false); }} className="mt-2 min-h-12 w-full rounded-2xl border border-[#e7e3da] bg-[#fbfaf7] px-4 text-sm font-bold focus:border-primary focus:outline-none focus:ring-4 focus:ring-primary/10">
+                  {CURRENCY_CODES.map((code) => <option key={code} value={code}>{CURRENCY_LABELS[code]}</option>)}
+                </select>
+                <span className="mt-1 block text-xs text-muted">Confirm the currency printed on the receipt before splitting.</span>
+              </label>
             </div>
 
             <div className="rounded-3xl border border-[#eeeae2] bg-[#fbfaf7] p-4 sm:p-5">
@@ -464,7 +504,7 @@ export default function ScanWorkspace({ initialGroupId }: { initialGroupId: stri
                   <div key={item.id} className="grid grid-cols-[minmax(0,1fr)_4.25rem_5rem_auto] items-center gap-2 border-b border-[#eae7df] pb-3 transition last:border-0 last:pb-0 sm:grid-cols-[minmax(0,1fr)_5rem_6rem_auto]">
                     <label className="min-w-0"><span className="sr-only">{t("scan.itemNameAria")}</span><input value={item.name} aria-invalid={fieldNeedsReview(`items[${index}].name`)} onChange={(event) => updateItem(item.id, { name: event.target.value })} className={`min-h-10 w-full min-w-0 rounded-xl border px-3 text-sm font-bold outline-none transition focus:border-[#ed795d] focus:ring-2 focus:ring-[#ed795d]/10 ${fieldNeedsReview(`items[${index}].name`) ? "border-[#e6c66f] bg-[#fffaf0]" : "border-transparent bg-white"}`} /></label>
                     <label><span className="sr-only">{t("scan.quantityAria", { name: item.name })}</span><input type="number" min="1" step="1" value={item.quantity} aria-invalid={fieldNeedsReview(`items[${index}].quantity`)} onChange={(event) => updateItem(item.id, { quantity: Math.max(1, Number(event.target.value) || 1) })} className={`min-h-10 w-full rounded-xl border px-2 text-center text-sm outline-none transition focus:border-[#ed795d] focus:ring-2 focus:ring-[#ed795d]/10 ${fieldNeedsReview(`items[${index}].quantity`) ? "border-[#e6c66f] bg-[#fffaf0]" : "border-transparent bg-white"}`} /></label>
-                    <label><span className="sr-only">{t("scan.priceAria", { name: item.name })}</span><input type="number" min="0" step="0.01" value={item.unitPrice} aria-invalid={fieldNeedsReview(`items[${index}].unit_price`)} onChange={(event) => updateItem(item.id, { unitPrice: Math.max(0, Number(event.target.value) || 0) })} className={`min-h-10 w-full rounded-xl border px-2 text-right text-sm font-bold outline-none transition focus:border-[#ed795d] focus:ring-2 focus:ring-[#ed795d]/10 ${fieldNeedsReview(`items[${index}].unit_price`) ? "border-[#e6c66f] bg-[#fffaf0]" : "border-transparent bg-white"}`} /></label>
+                    <label><span className="sr-only">{t("scan.priceAria", { name: item.name })}</span><input type="number" min="0" step={CURRENCY_DECIMALS[receiptCurrency] === 0 ? "1" : "0.01"} value={item.unitPrice} aria-invalid={fieldNeedsReview(`items[${index}].unit_price`)} onChange={(event) => updateItem(item.id, { unitPrice: Math.max(0, Number(event.target.value) || 0) })} className={`min-h-10 w-full rounded-xl border px-2 text-right text-sm font-bold outline-none transition focus:border-[#ed795d] focus:ring-2 focus:ring-[#ed795d]/10 ${fieldNeedsReview(`items[${index}].unit_price`) ? "border-[#e6c66f] bg-[#fffaf0]" : "border-transparent bg-white"}`} /></label>
                     <button type="button" onClick={() => removeItem(item.id)} className="grid h-9 w-9 place-items-center rounded-xl text-lg text-[#b6b2a8] transition hover:bg-white hover:text-[#ed795d]" aria-label={t("scan.removeItemAria", { name: item.name })}>×</button>
                   </div>
                 ))}
@@ -473,17 +513,18 @@ export default function ScanWorkspace({ initialGroupId }: { initialGroupId: stri
             </div>
 
             <div className="grid gap-3 sm:grid-cols-2">
-              <label className="flex items-center justify-between rounded-2xl border border-[#eeeae2] bg-[#f7f6f1] px-4 py-3 text-sm text-[#77766d] transition focus-within:border-[#ed795d] focus-within:bg-white"><span>{t("scan.tax")}</span><span className="flex items-center gap-1 font-bold text-[#25251f]"><span>$</span><input type="number" min="0" step="0.01" value={receipt.tax} aria-invalid={fieldNeedsReview("tax")} onChange={(event) => updateReceipt({ tax: Math.max(0, Number(event.target.value) || 0) })} className={`w-16 rounded px-1 text-right outline-none ${fieldNeedsReview("tax") ? "bg-[#fffaf0]" : "bg-transparent"}`} /></span></label>
-              <label className="flex items-center justify-between rounded-2xl border border-[#eeeae2] bg-[#f7f6f1] px-4 py-3 text-sm text-[#77766d] transition focus-within:border-[#ed795d] focus-within:bg-white"><span>{t("scan.tip")}</span><span className="flex items-center gap-1 font-bold text-[#25251f]"><span>$</span><input type="number" min="0" step="0.01" placeholder={t("scan.enter")} value={tipNeedsManualEntry ? "" : receipt.tip} aria-invalid={fieldNeedsReview("tip")} onChange={(event) => { setTipManuallyEdited(true); updateReceipt({ tip: event.target.value === "" ? 0 : Math.max(0, Number(event.target.value) || 0) }); }} className={`w-20 rounded px-1 text-right outline-none placeholder:text-[#aaa69c] ${fieldNeedsReview("tip") ? "bg-[#fffaf0]" : "bg-transparent"}`} /></span></label>
+              <label className="flex items-center justify-between rounded-2xl border border-[#eeeae2] bg-[#f7f6f1] px-4 py-3 text-sm text-[#77766d] transition focus-within:border-[#ed795d] focus-within:bg-white"><span>{t("scan.tax")}</span><span className="flex items-center gap-1 font-bold text-[#25251f]"><span>{receiptCurrency}</span><input type="number" min="0" step={CURRENCY_DECIMALS[receiptCurrency] === 0 ? "1" : "0.01"} value={receipt.tax} aria-invalid={fieldNeedsReview("tax")} onChange={(event) => updateReceipt({ tax: Math.max(0, Number(event.target.value) || 0) })} className={`w-16 rounded px-1 text-right outline-none ${fieldNeedsReview("tax") ? "bg-[#fffaf0]" : "bg-transparent"}`} /></span></label>
+              <label className="flex items-center justify-between rounded-2xl border border-[#eeeae2] bg-[#f7f6f1] px-4 py-3 text-sm text-[#77766d] transition focus-within:border-[#ed795d] focus-within:bg-white"><span>{t("scan.tip")}</span><span className="flex items-center gap-1 font-bold text-[#25251f]"><span>{receiptCurrency}</span><input type="number" min="0" step={CURRENCY_DECIMALS[receiptCurrency] === 0 ? "1" : "0.01"} placeholder={t("scan.enter")} value={tipNeedsManualEntry ? "" : receipt.tip} aria-invalid={fieldNeedsReview("tip")} onChange={(event) => { setTipManuallyEdited(true); updateReceipt({ tip: event.target.value === "" ? 0 : Math.max(0, Number(event.target.value) || 0) }); }} className={`w-20 rounded px-1 text-right outline-none placeholder:text-[#aaa69c] ${fieldNeedsReview("tip") ? "bg-[#fffaf0]" : "bg-transparent"}`} /></span></label>
             </div>
 
             <div className={`rounded-[1.65rem] p-5 text-white shadow-[0_16px_34px_rgba(37,37,31,0.16)] ${fieldNeedsReview("total") ? "border-2 border-[#e6c66f] bg-[#302d24]" : "bg-[#25251f]"}`}>
-              <label className="flex items-center justify-between gap-3 text-sm text-[#c7c4bb]"><span>{t("scan.subtotal")} · printed</span><span className="flex items-center gap-1"><span>$</span><input type="number" min="0" step="0.01" value={receipt.subtotal} aria-label={`${t("scan.subtotal")} printed on receipt`} aria-invalid={Math.abs(receipt.subtotal - calculatedSubtotal) > 0.005} onChange={(event) => updateReceipt({ subtotal: Math.max(0, Number(event.target.value) || 0) })} className="w-24 rounded bg-transparent text-right outline-none focus:ring-2 focus:ring-white/50" /></span></label>
-              <div className="mt-2 flex items-center justify-between text-xs text-[#c7c4bb]"><span>Items calculated from edited lines</span><span>{money.format(calculatedSubtotal)}</span></div>
-              <div className="mt-2 flex items-center justify-between text-sm text-[#c7c4bb]"><span>{t("scan.taxAndTip")}</span><span>{money.format(receipt.tax + receipt.tip)}</span></div>
+              <label className="flex items-center justify-between gap-3 text-sm text-[#c7c4bb]"><span>{t("scan.subtotal")} · printed</span><span className="flex items-center gap-1"><span>{receiptCurrency}</span><input type="number" min="0" step={CURRENCY_DECIMALS[receiptCurrency] === 0 ? "1" : "0.01"} value={receipt.subtotal} aria-label={`${t("scan.subtotal")} printed on receipt`} aria-invalid={Math.abs(receipt.subtotal - calculatedSubtotal) > 0.005} onChange={(event) => updateReceipt({ subtotal: Math.max(0, Number(event.target.value) || 0) })} className="w-24 rounded bg-transparent text-right outline-none focus:ring-2 focus:ring-white/50" /></span></label>
+              <div className="mt-2 flex items-center justify-between text-xs text-[#c7c4bb]"><span>Items calculated from edited lines</span><span>{formatMoney(calculatedSubtotal, receiptCurrency)}</span></div>
+              <div className="mt-2 flex items-center justify-between text-sm text-[#c7c4bb]"><span>{t("scan.taxAndTip")}</span><span>{formatMoney(receipt.tax + receipt.tip, receiptCurrency)}</span></div>
               <div className="my-4 border-t border-white/15" />
-              <label className="flex items-center justify-between gap-3"><span className="font-bold">{t("scan.chargedTotal")}</span><span className="flex items-center gap-1 text-2xl font-extrabold"><span>$</span><input type="number" min="0" step="0.01" value={receipt.total} aria-label={t("scan.chargedTotal")} aria-invalid={fieldNeedsReview("total") || Math.abs(receipt.total - calculatedTotal) > 0.005} onChange={(event) => updateReceipt({ total: Math.max(0, Number(event.target.value) || 0) })} className="w-32 rounded bg-transparent text-right outline-none focus:ring-2 focus:ring-white/50" /></span></label>
-              {(Math.abs(receipt.total - calculatedTotal) > 0.005 || Math.abs(receipt.subtotal - calculatedSubtotal) > 0.005) && <p className="mt-3 text-xs leading-5 text-[#f4d578]">{t("scan.calculatedFromFields", { amount: money.format(calculatedTotal) })} Correct the extracted item, subtotal, tax, tip, or charged total before continuing. Splitzy will not adjust a price for you.</p>}
+              <label className="flex items-center justify-between gap-3"><span className="font-bold">{t("scan.chargedTotal")}</span><span className="flex items-center gap-1 text-2xl font-extrabold"><span>{receiptCurrency}</span><input type="number" min="0" step={CURRENCY_DECIMALS[receiptCurrency] === 0 ? "1" : "0.01"} value={receipt.total} aria-label={t("scan.chargedTotal")} aria-invalid={fieldNeedsReview("total") || Math.abs(receipt.total - calculatedTotal) > 0.005} onChange={(event) => updateReceipt({ total: Math.max(0, Number(event.target.value) || 0) })} className="w-32 rounded bg-transparent text-right outline-none focus:ring-2 focus:ring-white/50" /></span></label>
+              {parseMoneyToMinorUnits(String(receipt.total), receiptCurrency) !== null && <div className="mt-2 text-xs text-[#c7c4bb]"><CurrencyAmount amountMinor={parseMoneyToMinorUnits(String(receipt.total), receiptCurrency)!} originalCurrency={receiptCurrency} /></div>}
+              {(Math.abs(receipt.total - calculatedTotal) > 0.005 || Math.abs(receipt.subtotal - calculatedSubtotal) > 0.005) && <p className="mt-3 text-xs leading-5 text-[#f4d578]">{t("scan.calculatedFromFields", { amount: formatMoney(calculatedTotal, receiptCurrency) })} Correct the extracted item, subtotal, tax, tip, or charged total before continuing. Splitzy will not adjust a price for you.</p>}
             </div>
 
             <label className="flex items-start gap-3 rounded-xl border border-[#dfe5df] bg-[#f7f9f6] p-3 text-sm leading-5"><input type="checkbox" checked={receiptReviewed} onChange={(event) => setReceiptReviewed(event.target.checked)} className="mt-1 h-4 w-4 accent-[#1e5a43]" /><span>I reviewed and corrected the extracted receipt details. I’ll select the payer and assign every item on the next screen.</span></label>

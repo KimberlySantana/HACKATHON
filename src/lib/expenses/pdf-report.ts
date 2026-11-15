@@ -2,6 +2,7 @@ import { PDFDocument, rgb, type PDFFont, type PDFPage } from "pdf-lib";
 import fontkit from "@pdf-lib/fontkit";
 import { calculateItemSharesCents, formatCents, getExpenseSubtotalCents, type SettlementMember, type Transfer } from "./calculations.ts";
 import type { ExpenseRecord } from "./types.ts";
+import type { CurrencyCode } from "../currency/types.ts";
 
 type ReportGroup = { name: string; members: SettlementMember[] };
 type BalanceMap = Map<string, number>;
@@ -94,6 +95,7 @@ export async function createSettlementPdf({
   balances,
   generatedAt = new Date(),
   dataSource,
+  currency,
   fontBytes,
 }: {
   group: ReportGroup;
@@ -102,9 +104,12 @@ export async function createSettlementPdf({
   balances: BalanceMap;
   generatedAt?: Date;
   dataSource: "Cloud-saved records" | "Guest records on this device";
+  currency?: CurrencyCode;
   /** Optional font bytes for deterministic local tests. Normal browser use fetches the bundled font. */
   fontBytes?: Uint8Array;
 }): Promise<Uint8Array> {
+  const reportCurrency = currency ?? expenses[0]?.currency ?? "USD";
+  if (new Set(expenses.map((expense) => expense.currency ?? "USD")).size > 1) throw new Error("A PDF report cannot combine expenses in different currencies.");
   const pdf = await PDFDocument.create();
   pdf.registerFontkit(fontkit);
   const embeddedFont = await pdf.embedFont(fontBytes ?? await loadFontBytes(), { subset: true });
@@ -124,7 +129,7 @@ export async function createSettlementPdf({
       page.drawText("SPLITZY", { x: MARGIN, y: 762, size: 9, font: embeddedFont, color: COLORS.paper });
       page.drawText("Settlement report", { x: MARGIN, y: 733, size: 23, font: embeddedFont, color: COLORS.paper });
       drawFit(page, group.name, embeddedFont, { x: MARGIN, y: 709, size: 13, maxWidth: 340, color: COLORS.paper });
-      page.drawText(`${formatReportDate(generatedAt)}  ·  Currency: USD`, { x: MARGIN, y: 689, size: 8.5, font: embeddedFont, color: rgb(0.88, 0.93, 0.89) });
+      page.drawText(`${formatReportDate(generatedAt)}  ·  Currency: ${reportCurrency}`, { x: MARGIN, y: 689, size: 8.5, font: embeddedFont, color: rgb(0.88, 0.93, 0.89) });
       drawFit(page, dataSource, embeddedFont, { x: PAGE_WIDTH - 220, y: 689, size: 8, maxWidth: 176, color: rgb(0.88, 0.93, 0.89) });
       y = 650;
       return;
@@ -166,7 +171,7 @@ export async function createSettlementPdf({
 
   function drawSummaryCards() {
     const cards = [
-      { label: "TOTAL GROUP EXPENSES", value: formatCents(totalExpensesCents) },
+      { label: "TOTAL GROUP EXPENSES", value: formatCents(totalExpensesCents, reportCurrency) },
       { label: "MEMBERS", value: String(group.members.length) },
       { label: "SAVED RECEIPTS", value: String(expenses.length) },
       { label: "SUGGESTED TRANSFERS", value: String(transfers.length) },
@@ -198,7 +203,7 @@ export async function createSettlementPdf({
     page.drawLine({ start: { x: arrowX + 9, y: arrowY + 4 }, end: { x: arrowX + 14, y: arrowY }, thickness: 1.2, color: COLORS.muted });
     page.drawLine({ start: { x: arrowX + 9, y: arrowY - 4 }, end: { x: arrowX + 14, y: arrowY }, thickness: 1.2, color: COLORS.muted });
     drawFit(page, creditor, embeddedFont, { x: MARGIN + 203, y: y - 21, size: 10, maxWidth: 155, color: COLORS.green });
-    const amount = formatCents(transfer.amountCents);
+    const amount = formatCents(transfer.amountCents, reportCurrency);
     page.drawText(amount, { x: PAGE_WIDTH - MARGIN - 12 - embeddedFont.widthOfTextAtSize(amount, 11), y: y - 21, size: 11, font: embeddedFont, color: COLORS.ink });
     y -= height + 6;
   }
@@ -212,7 +217,7 @@ export async function createSettlementPdf({
     page.drawRectangle({ x, y: y - height, width, height, color: pale });
     page.drawRectangle({ x, y: y - height, width: 3, height, color: accent });
     drawFit(page, member.name, embeddedFont, { x: x + 10, y: y - 15, size: 8.5, maxWidth: width - 20, color: COLORS.ink });
-    const value = isOwed ? `− ${formatCents(-balance)}  ·  Owes` : isReceivable ? `+ ${formatCents(balance)}  ·  Receives` : `${formatCents(0)}  ·  No balance due`;
+    const value = isOwed ? `− ${formatCents(-balance, reportCurrency)}  ·  Owes` : isReceivable ? `+ ${formatCents(balance, reportCurrency)}  ·  Receives` : `${formatCents(0, reportCurrency)}  ·  No balance due`;
     drawFit(page, value, embeddedFont, { x: x + 10, y: y - 29, size: 8.5, maxWidth: width - 20, color: accent });
   }
 
@@ -244,7 +249,7 @@ export async function createSettlementPdf({
     const total = getExpenseSubtotalCents(expense) + expense.taxCents + expense.tipCents;
     const title = continued ? `${expense.description}  ·  continued` : expense.description;
     drawFit(page, title, embeddedFont, { x: MARGIN + 2, y: y - 13, size: 10.5, maxWidth: 340, color: COLORS.ink });
-    const amount = formatCents(total);
+    const amount = formatCents(total, reportCurrency);
     page.drawText(amount, { x: PAGE_WIDTH - MARGIN - 2 - embeddedFont.widthOfTextAtSize(amount, 10.5), y: y - 13, size: 10.5, font: embeddedFont, color: COLORS.ink });
     y -= 28;
     const date = formatExpenseDate(expense.createdAt);
@@ -259,7 +264,7 @@ export async function createSettlementPdf({
     const shares = calculateItemSharesCents(item, memberIds);
     const assignedNames = item.assignedMemberIds.map((id) => names.get(id)).filter((name): name is string => Boolean(name));
     const assignedText = assignedNames.join(", ");
-    const allocations = [...shares].map(([memberId, amount]) => `${names.get(memberId) ?? "Group member"} ${formatCents(amount)}`).join("  ·  ");
+    const allocations = [...shares].map(([memberId, amount]) => `${names.get(memberId) ?? "Group member"} ${formatCents(amount, reportCurrency)}`).join("  ·  ");
     const itemLines = wrapText(item.name, embeddedFont, 8.5, 170);
     const assignmentLines = wrapText(assignedText, embeddedFont, 7.5, 145);
     const allocationLines = wrapText(allocations, embeddedFont, 7.5, 120);
@@ -305,7 +310,7 @@ export async function createSettlementPdf({
       for (const item of expense.items) drawItemRow(expense, item);
       if (expense.taxCents > 0 || expense.tipCents > 0) {
         ensureSpace(23, "Saved receipt details continued");
-        const details = [expense.taxCents > 0 ? `Tax ${formatCents(expense.taxCents)}` : "", expense.tipCents > 0 ? `Tip ${formatCents(expense.tipCents)}` : ""].filter(Boolean).join("  ·  ");
+        const details = [expense.taxCents > 0 ? `Tax ${formatCents(expense.taxCents, reportCurrency)}` : "", expense.tipCents > 0 ? `Tip ${formatCents(expense.tipCents, reportCurrency)}` : ""].filter(Boolean).join("  ·  ");
         page.drawText(details, { x: PAGE_WIDTH - MARGIN - embeddedFont.widthOfTextAtSize(details, 7.5), y: y - 3, size: 7.5, font: embeddedFont, color: COLORS.muted });
         y -= 19;
       }

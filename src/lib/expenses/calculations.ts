@@ -1,4 +1,6 @@
-import type { ExpenseRecord } from "@/lib/expenses/types";
+import type { ExpenseRecord } from "./types.ts";
+import { CURRENCY_DECIMALS, type CurrencyCode } from "../currency/types.ts";
+import { formatMinorUnits } from "../currency/money.ts";
 
 export interface SettlementMember { id: string; name: string; }
 export interface Transfer { fromMemberId: string; toMemberId: string; amountCents: number; }
@@ -14,8 +16,25 @@ export function parseMoneyToCents(value: string): number | null {
   return Number.isSafeInteger(total) ? total : null;
 }
 
-export function formatCents(cents: number): string {
-  return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(cents / 100);
+/** Parses a currency amount into integer minor units using that currency's precision. */
+export function parseMoneyToMinorUnits(value: string, currency: CurrencyCode): number | null {
+  const normalized = value.trim().replace(/^[^\d]+/, "");
+  const decimals = CURRENCY_DECIMALS[currency];
+  const pattern = decimals === 0 ? /^(\d+)$/ : new RegExp(`^(\\d+)(?:\\.(\\d{1,${decimals}}))?$`);
+  const match = pattern.exec(normalized);
+  if (!match) return null;
+  const factor = 10 ** decimals;
+  const fraction = decimals ? Number((match[2] ?? "").padEnd(decimals, "0")) : 0;
+  const total = Number(match[1]) * factor + fraction;
+  return Number.isSafeInteger(total) ? total : null;
+}
+
+export function formatCents(cents: number, currency: CurrencyCode = "USD", locale?: string): string {
+  return formatMinorUnits(cents, currency, locale);
+}
+
+export function expenseCurrency(expense: ExpenseRecord): CurrencyCode {
+  return expense.currency ?? "USD";
 }
 
 function splitEvenly(amountCents: number, memberIds: string[]) {
@@ -112,6 +131,7 @@ export function calculateExpenseShares(expense: ExpenseRecord, memberIds: string
 
 export function calculateSettlement(expenses: ExpenseRecord[], members: SettlementMember[]) {
   if (members.length === 0) throw new Error("A settlement needs at least one group member.");
+  if (new Set(expenses.map(expenseCurrency)).size > 1) throw new Error("This group contains expenses in different currencies. Choose an explicit conversion policy before settling.");
   const memberIds = members.map((member) => member.id);
   const balances = new Map(memberIds.map((id) => [id, 0]));
   for (const expense of expenses) {

@@ -10,6 +10,7 @@ const receipt = {
 test("receipt handoff converts currency once to cents and leaves payer and assignments unset", () => {
   const draft = createReceiptExpenseDraft(receipt, "group-1", new Date("2026-11-15T12:00:00Z"));
   assert.equal(draft.groupId, "group-1");
+  assert.equal(draft.currency, "USD");
   assert.equal(draft.description, "Cafe");
   assert.equal(draft.paidByMemberId, "");
   assert.equal(draft.items[0].unitPriceCents, 325);
@@ -25,10 +26,29 @@ test("receipt handoff converts currency once to cents and leaves payer and assig
 test("receipt handoff rejects invalid prices, quantities, names, and empty receipts", () => {
   assert.throws(() => createReceiptExpenseDraft({ ...receipt, items: [] }, "group-1"), /at least one receipt item/);
   assert.throws(() => createReceiptExpenseDraft({ ...receipt, items: [{ ...receipt.items[0], quantity: 1.5 }] }, "group-1"), /whole-number quantity/);
-  assert.throws(() => createReceiptExpenseDraft({ ...receipt, items: [{ ...receipt.items[0], unitPrice: 1.234 }] }, "group-1"), /no more than two decimal places/);
+  assert.throws(() => createReceiptExpenseDraft({ ...receipt, items: [{ ...receipt.items[0], unitPrice: 1.234 }] }, "group-1"), /correct precision for USD/);
   assert.throws(() => createReceiptExpenseDraft({ ...receipt, merchant: " " }, "group-1"), /merchant or expense name/);
 });
 
 test("receipt draft keys are isolated by group", () => {
   assert.notEqual(receiptDraftStorageKey("group-a"), receiptDraftStorageKey("group-b"));
+});
+
+
+test("receipt handoff keeps EUR and zero-decimal KRW amounts in original minor units", () => {
+  const eur = createReceiptExpenseDraft(receipt, "group-1", new Date(), "EUR");
+  assert.equal(eur.currency, "EUR");
+  assert.equal(eur.items[0].unitPriceCents, 325);
+  const krwReceipt = {
+    ...receipt, subtotal: 850, tax: 68, tip: 170, total: 1088,
+    items: [
+      { ...receipt.items[0], unitPrice: 325, total: 650 },
+      { ...receipt.items[1], unitPrice: 200, total: 200 },
+    ],
+  };
+  const krw = createReceiptExpenseDraft(krwReceipt, "group-1", new Date(), "KRW");
+  assert.equal(krw.currency, "KRW");
+  assert.equal(krw.items[0].unitPriceCents, 325);
+  assert.equal(krw.taxCents, 68);
+  assert.throws(() => createReceiptExpenseDraft(receipt, "group-1", new Date(), "KRW"), /correct precision for KRW/);
 });

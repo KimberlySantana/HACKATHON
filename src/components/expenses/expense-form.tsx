@@ -6,13 +6,14 @@ import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { AlertCircle, ArrowLeft, ArrowRight, Check, CircleDollarSign, Plus, Trash2 } from "lucide-react";
 import { useSavedGroups } from "@/components/groups/use-saved-groups";
 import { useGroupExpenses, type ExpenseStorageMode } from "@/components/expenses/use-group-expenses";
-import { calculateExpenseShares, formatCents, getExpenseSubtotalCents, parseMoneyToCents } from "@/lib/expenses/calculations";
+import { calculateExpenseShares, formatCents, getExpenseSubtotalCents, parseMoneyToMinorUnits } from "@/lib/expenses/calculations";
 import { assignEveryone, getUnassignedItems, toggleAssignedMember } from "@/lib/expenses/assignments";
 import { hasExplicitPayer } from "@/lib/expenses/validation";
 import { expenseReturnHref, removeDraftItem } from "@/lib/expenses/draft";
 import { canLeaveWithUnsavedChanges } from "@/lib/forms/navigation";
 import { isReceiptExpenseDraft, receiptDraftStorageKey } from "@/lib/receipt/draft";
 import type { ExpenseRecord } from "@/lib/expenses/types";
+import { CURRENCY_CODES, CURRENCY_DECIMALS, CURRENCY_LABELS, type CurrencyCode } from "@/lib/currency/types";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -21,8 +22,12 @@ import { FormErrorToast } from "@/components/ui/form-error-toast";
 
 interface DraftItem { id: string; name: string; note: string; noteOpen: boolean; quantity: string; unitPrice: string; assignedMemberIds: string[]; memberSharesCents?: Record<string, number>; }
 const blankItem = (): DraftItem => ({ id: "new-item-1", name: "", note: "", noteOpen: false, quantity: "1", unitPrice: "", assignedMemberIds: [] });
-const moneyValue = (value: string) => value.trim() === "" ? 0 : parseMoneyToCents(value);
-const centsInput = (amount: number) => `${Math.floor(amount / 100)}.${String(amount % 100).padStart(2, "0")}`;
+const moneyValue = (value: string, currency: CurrencyCode) => value.trim() === "" ? 0 : parseMoneyToMinorUnits(value, currency);
+const centsInput = (amount: number, currency: CurrencyCode) => {
+  const decimals = CURRENCY_DECIMALS[currency];
+  const factor = 10 ** decimals;
+  return decimals ? `${Math.floor(amount / factor)}.${String(amount % factor).padStart(decimals, "0")}` : String(amount);
+};
 
 export function ExpenseForm({ groupId, expenseId, offline = false, fromScan = false }: { groupId: string; expenseId?: string; offline?: boolean; fromScan?: boolean }) {
   const router = useRouter();
@@ -35,6 +40,7 @@ export function ExpenseForm({ groupId, expenseId, offline = false, fromScan = fa
   const [items, setItems] = useState<DraftItem[]>([blankItem()]);
   const [tax, setTax] = useState("");
   const [tip, setTip] = useState("");
+  const [currency, setCurrency] = useState<CurrencyCode>("USD");
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [pendingOfflineExpense, setPendingOfflineExpense] = useState<ExpenseRecord | null>(null);
@@ -55,16 +61,17 @@ export function ExpenseForm({ groupId, expenseId, offline = false, fromScan = fa
     if (!expenseId || loading || expenseStore.loading) return;
     if (!editRecord) { setEditMissing(true); setEditReady(true); return; }
     setDescription(editRecord.description);
+    setCurrency(editRecord.currency ?? "USD");
     setPaidByMemberId(editRecord.paidByMemberId);
-    setTax(centsInput(editRecord.taxCents));
-    setTip(centsInput(editRecord.tipCents));
+    setTax(centsInput(editRecord.taxCents, editRecord.currency ?? "USD"));
+    setTip(centsInput(editRecord.tipCents, editRecord.currency ?? "USD"));
     setItems(editRecord.items.map((item) => ({
       id: item.id,
       name: item.name,
       note: item.note ?? "",
       noteOpen: Boolean(item.note),
       quantity: String(item.quantity),
-      unitPrice: centsInput(item.unitPriceCents),
+      unitPrice: centsInput(item.unitPriceCents, editRecord.currency ?? "USD"),
       assignedMemberIds: item.assignedMemberIds,
       memberSharesCents: item.memberSharesCents,
     })));
@@ -85,15 +92,17 @@ export function ExpenseForm({ groupId, expenseId, offline = false, fromScan = fa
       }
       setDescription(scanned.description);
       setPaidByMemberId("");
-      setTax(centsInput(scanned.taxCents));
-      setTip(centsInput(scanned.tipCents));
+      const scannedCurrency = scanned.currency ?? "USD";
+      setCurrency(scannedCurrency);
+      setTax(centsInput(scanned.taxCents, scannedCurrency));
+      setTip(centsInput(scanned.tipCents, scannedCurrency));
       setItems(scanned.items.map((item) => ({
         id: item.id,
         name: item.name,
         note: "",
         noteOpen: false,
         quantity: String(item.quantity),
-        unitPrice: centsInput(item.unitPriceCents),
+        unitPrice: centsInput(item.unitPriceCents, scannedCurrency),
         assignedMemberIds: [],
       })));
       setScannedReceiptCreatedAt(scanned.createdAt);
@@ -108,20 +117,21 @@ export function ExpenseForm({ groupId, expenseId, offline = false, fromScan = fa
 
   const parsedItems = useMemo(() => items.map((item) => ({
     draft: item,
-    price: parseMoneyToCents(item.unitPrice),
+    price: parseMoneyToMinorUnits(item.unitPrice, currency),
     quantity: Number(item.quantity),
-  })), [items]);
+  })), [currency, items]);
   const subtotalCents = parsedItems.reduce((sum, item) => sum + (item.price ?? 0) * (Number.isInteger(item.quantity) ? item.quantity : 0), 0);
-  const taxCents = moneyValue(tax);
-  const tipCents = moneyValue(tip);
+  const taxCents = moneyValue(tax, currency);
+  const tipCents = moneyValue(tip, currency);
   const memberIds = saved?.members.map((member) => member.id) ?? [];
   const unassignedItems = getUnassignedItems(items, memberIds);
   const unassignedItemIds = new Set(unassignedItems.map((item) => item.id));
+  const currencyLocked = Boolean(expenseId || tax.trim() || tip.trim() || items.some((item) => item.name.trim() || item.unitPrice.trim()));
   const preview = useMemo(() => {
     if (!saved || !description.trim() || !hasExplicitPayer(paidByMemberId, saved.members.map((member) => member.id)) || parsedItems.some(({ draft, price, quantity }) => !draft.name.trim() || price === null || price < 0 || !Number.isInteger(quantity) || quantity < 1 || draft.assignedMemberIds.length === 0) || taxCents === null || tipCents === null) return null;
-    const draft: ExpenseRecord = { id: "preview", groupId, description, paidByMemberId, items: parsedItems.map(({ draft: item, price, quantity }) => ({ id: item.id, name: item.name.trim(), note: item.note.trim() || undefined, quantity, unitPriceCents: price!, assignedMemberIds: item.assignedMemberIds, memberSharesCents: item.memberSharesCents })), taxCents, tipCents, createdAt: "" };
+    const draft: ExpenseRecord = { id: "preview", groupId, description, paidByMemberId, items: parsedItems.map(({ draft: item, price, quantity }) => ({ id: item.id, name: item.name.trim(), note: item.note.trim() || undefined, quantity, unitPriceCents: price!, assignedMemberIds: item.assignedMemberIds, memberSharesCents: item.memberSharesCents })), taxCents, tipCents, currency, createdAt: "" };
     try { return calculateExpenseShares(draft, saved.members.map((member) => member.id)); } catch { return null; }
-  }, [description, groupId, paidByMemberId, parsedItems, saved, taxCents, tipCents]);
+  }, [currency, description, groupId, paidByMemberId, parsedItems, saved, taxCents, tipCents]);
 
   function updateItem(itemId: string, update: Partial<DraftItem>) {
     setDirty(true);
@@ -213,8 +223,8 @@ export function ExpenseForm({ groupId, expenseId, offline = false, fromScan = fa
       scrollToFirstUnassignedItem();
       return;
     }
-    if (taxCents === null) return reject("Enter tax as a dollar amount with up to two decimal places.", "expense-tax");
-    if (tipCents === null) return reject("Enter tip as a dollar amount with up to two decimal places.", "expense-tip");
+    if (taxCents === null) return reject(`Enter tax as a ${currency} amount with the correct decimal precision.`, "expense-tax");
+    if (tipCents === null) return reject(`Enter tip as a ${currency} amount with the correct decimal precision.`, "expense-tip");
     if (taxCents + tipCents > 0 && subtotalCents === 0) return reject("Add an item with a price before adding tax or tip.", items[0] ? `price-${items[0].id}` : "add-expense-item");
     if (!Number.isSafeInteger(subtotalCents + taxCents + tipCents)) return reject("This expense total is too large to calculate safely.");
     if (normalized.some(({ price, quantity }) => !Number.isSafeInteger(price! * quantity))) return reject("An item total is too large to calculate safely.");
@@ -222,7 +232,7 @@ export function ExpenseForm({ groupId, expenseId, offline = false, fromScan = fa
     const expense: ExpenseRecord = {
       id: expenseId ?? crypto.randomUUID(), groupId, description: description.trim(), paidByMemberId,
       items: normalized.map(({ draft, price, quantity }) => ({ id: draft.id.startsWith("new-item") ? crypto.randomUUID() : draft.id, name: draft.name.trim(), note: draft.note.trim() || undefined, quantity, unitPriceCents: price!, assignedMemberIds: draft.assignedMemberIds, memberSharesCents: draft.memberSharesCents })),
-      taxCents, tipCents, createdAt: editRecord?.createdAt ?? scannedReceiptCreatedAt ?? new Date().toISOString(),
+      taxCents, tipCents, currency, createdAt: editRecord?.createdAt ?? scannedReceiptCreatedAt ?? new Date().toISOString(),
     };
     const target: ExpenseStorageMode = expenseStore.signedIn ? (offline ? "offline" : "cloud") : "guest";
     await persist(expense, target);
@@ -251,6 +261,7 @@ export function ExpenseForm({ groupId, expenseId, offline = false, fromScan = fa
         <div className="mt-5 grid gap-4 sm:grid-cols-2">
           <div className="sm:col-span-2"><label htmlFor="expense-description" className="mb-1.5 block text-sm font-semibold">Merchant or expense name</label><Input id="expense-description" maxLength={80} value={description} onChange={(event) => { setDescription(event.target.value); setDirty(true); setError(null); setInvalidField(null); }} placeholder="e.g. Dinner at Sunroom" autoComplete="off" aria-invalid={invalidField === "expense-description"} className={invalidField === "expense-description" ? "border-danger ring-2 ring-danger/15" : ""} /></div>
           <div><label htmlFor="paid-by" className="mb-1.5 block text-sm font-semibold">Paid by</label><select id="paid-by" value={paidByMemberId} onChange={(event) => { setPaidByMemberId(event.target.value); setDirty(true); setError(null); setInvalidField(null); }} aria-invalid={invalidField === "paid-by"} className={`h-11 w-full rounded-xl border border-border bg-white px-3.5 text-base shadow-sm outline-none focus:border-primary focus:ring-4 focus:ring-primary/10 sm:text-sm ${invalidField === "paid-by" ? "border-danger ring-2 ring-danger/15" : ""}`}><option value="">Choose a payer</option>{saved.members.map((member) => <option key={member.id} value={member.id}>{member.name}</option>)}</select></div>
+          <div><label htmlFor="expense-currency" className="mb-1.5 block text-sm font-semibold">Original currency</label><select id="expense-currency" value={currency} disabled={currencyLocked} onChange={(event) => { setCurrency(event.target.value as CurrencyCode); setDirty(true); setError(null); setInvalidField(null); }} className="h-11 w-full rounded-xl border border-border bg-white px-3.5 text-sm shadow-sm disabled:bg-surface-muted">{CURRENCY_CODES.map((code) => <option key={code} value={code}>{CURRENCY_LABELS[code]}</option>)}</select><p className="mt-1 text-[11px] leading-4 text-muted">{currencyLocked ? "Currency is fixed after item amounts are entered." : "Choose the receipt currency before adding prices."}</p></div>
           <div className="flex items-end"><p className="text-xs leading-5 text-muted">The payer covers the full receipt upfront. The split below shows how the group shares it.</p></div>
         </div>
       </Card>
@@ -269,7 +280,7 @@ export function ExpenseForm({ groupId, expenseId, offline = false, fromScan = fa
               <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_104px_138px]">
                 <div><label className="mb-1.5 block text-xs font-semibold text-muted" htmlFor={`item-name-${item.id}`}>Item name</label><Input id={`item-name-${item.id}`} maxLength={80} value={item.name} onChange={(event) => updateItem(item.id, { name: event.target.value })} placeholder="Product or dish" aria-invalid={invalidField === `item-name-${item.id}`} className={invalidField === `item-name-${item.id}` ? "border-danger ring-2 ring-danger/15" : ""} /></div>
                 <div><label className="mb-1.5 block text-xs font-semibold text-muted" htmlFor={`qty-${item.id}`}>Qty</label><Input id={`qty-${item.id}`} type="number" min="1" max="999" step="1" value={item.quantity} onChange={(event) => updateItem(item.id, { quantity: event.target.value })} inputMode="numeric" aria-invalid={invalidField === `qty-${item.id}`} className={invalidField === `qty-${item.id}` ? "border-danger ring-2 ring-danger/15" : ""} /></div>
-                <div><label className="mb-1.5 block text-xs font-semibold text-muted" htmlFor={`price-${item.id}`}>Price each · USD</label><Input id={`price-${item.id}`} inputMode="decimal" value={item.unitPrice} onChange={(event) => updateItem(item.id, { unitPrice: event.target.value })} placeholder="0.00" aria-invalid={invalidField === `price-${item.id}`} className={invalidField === `price-${item.id}` ? "border-danger ring-2 ring-danger/15" : ""} /></div>
+                <div><label className="mb-1.5 block text-xs font-semibold text-muted" htmlFor={`price-${item.id}`}>Price each · {currency}</label><Input id={`price-${item.id}`} inputMode="decimal" value={item.unitPrice} onChange={(event) => updateItem(item.id, { unitPrice: event.target.value })} placeholder={CURRENCY_DECIMALS[currency] === 0 ? "0" : "0.00"} aria-invalid={invalidField === `price-${item.id}`} className={invalidField === `price-${item.id}` ? "border-danger ring-2 ring-danger/15" : ""} /></div>
               </div>
               {item.noteOpen ? <div className="mt-3 rounded-xl bg-[#f7f9f6] p-3">
                 <div className="flex items-center justify-between gap-2"><label htmlFor={`note-${item.id}`} className="text-xs font-semibold text-muted">Item note <span className="font-normal">· optional</span></label><button type="button" onClick={() => updateItem(item.id, { note: "", noteOpen: false })} className="inline-flex min-h-9 items-center rounded-lg px-2 text-xs font-semibold text-muted hover:bg-white hover:text-danger focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-primary/20">Remove note</button></div>
@@ -294,14 +305,14 @@ export function ExpenseForm({ groupId, expenseId, offline = false, fromScan = fa
       <Card className="p-5 sm:p-6">
         <div className="flex items-center gap-2"><CircleDollarSign size={18} className="text-primary" aria-hidden="true" /><h3 className="text-base font-semibold">Tax and tip</h3></div>
         <p className="mt-1 text-xs leading-5 text-muted">Shared in proportion to each person’s item subtotal.</p>
-        <div className="mt-4 grid grid-cols-2 gap-3"><div><label className="mb-1.5 block text-xs font-semibold text-muted" htmlFor="expense-tax">Tax · USD</label><Input id="expense-tax" inputMode="decimal" value={tax} onChange={(event) => { setTax(event.target.value); setDirty(true); setError(null); setInvalidField(null); }} placeholder="0.00" aria-invalid={invalidField === "expense-tax"} className={invalidField === "expense-tax" ? "border-danger ring-2 ring-danger/15" : ""} /></div><div><label className="mb-1.5 block text-xs font-semibold text-muted" htmlFor="expense-tip">Tip · USD</label><Input id="expense-tip" inputMode="decimal" value={tip} onChange={(event) => { setTip(event.target.value); setDirty(true); setError(null); setInvalidField(null); }} placeholder="0.00" aria-invalid={invalidField === "expense-tip"} className={invalidField === "expense-tip" ? "border-danger ring-2 ring-danger/15" : ""} /></div></div>
+        <div className="mt-4 grid grid-cols-2 gap-3"><div><label className="mb-1.5 block text-xs font-semibold text-muted" htmlFor="expense-tax">Tax · {currency}</label><Input id="expense-tax" inputMode="decimal" value={tax} onChange={(event) => { setTax(event.target.value); setDirty(true); setError(null); setInvalidField(null); }} placeholder={CURRENCY_DECIMALS[currency] === 0 ? "0" : "0.00"} aria-invalid={invalidField === "expense-tax"} className={invalidField === "expense-tax" ? "border-danger ring-2 ring-danger/15" : ""} /></div><div><label className="mb-1.5 block text-xs font-semibold text-muted" htmlFor="expense-tip">Tip · {currency}</label><Input id="expense-tip" inputMode="decimal" value={tip} onChange={(event) => { setTip(event.target.value); setDirty(true); setError(null); setInvalidField(null); }} placeholder={CURRENCY_DECIMALS[currency] === 0 ? "0" : "0.00"} aria-invalid={invalidField === "expense-tip"} className={invalidField === "expense-tip" ? "border-danger ring-2 ring-danger/15" : ""} /></div></div>
         <div className="mt-5 rounded-xl bg-[#f7f9f6] p-4 text-sm">
-          <div className="flex justify-between text-muted"><span>Items subtotal</span><span>{formatCents(subtotalCents)}</span></div>
-          <div className="mt-2 flex justify-between text-muted"><span>Tax</span><span>{formatCents(taxCents ?? 0)}</span></div>
-          <div className="mt-2 flex justify-between text-muted"><span>Tip</span><span>{formatCents(tipCents ?? 0)}</span></div>
+          <div className="flex justify-between text-muted"><span>Items subtotal</span><span>{formatCents(subtotalCents, currency)}</span></div>
+          <div className="mt-2 flex justify-between text-muted"><span>Tax</span><span>{formatCents(taxCents ?? 0, currency)}</span></div>
+          <div className="mt-2 flex justify-between text-muted"><span>Tip</span><span>{formatCents(tipCents ?? 0, currency)}</span></div>
           <div className="my-3 border-t border-border" />
-          <div className="flex items-baseline justify-between"><span className="font-semibold">Receipt total</span><strong className="text-xl font-semibold tracking-[-0.04em]">{formatCents(subtotalCents + (taxCents ?? 0) + (tipCents ?? 0))}</strong></div>
-          {preview ? <div className="mt-4 border-t border-border pt-3"><p className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted">Each person’s share</p>{saved.members.map((member) => <div key={member.id} className="flex justify-between py-1 text-sm"><span>{member.name}</span><span className="font-semibold">{formatCents(preview.get(member.id) ?? 0)}</span></div>)}</div> : <p className="mt-3 text-xs leading-5 text-muted">Select people for each item to see the per-person split.</p>}
+          <div className="flex items-baseline justify-between"><span className="font-semibold">Receipt total</span><strong className="text-xl font-semibold tracking-[-0.04em]">{formatCents(subtotalCents + (taxCents ?? 0) + (tipCents ?? 0), currency)}</strong></div>
+          {preview ? <div className="mt-4 border-t border-border pt-3"><p className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted">Each person’s share</p>{saved.members.map((member) => <div key={member.id} className="flex justify-between py-1 text-sm"><span>{member.name}</span><span className="font-semibold">{formatCents(preview.get(member.id) ?? 0, currency)}</span></div>)}</div> : <p className="mt-3 text-xs leading-5 text-muted">Select people for each item to see the per-person split.</p>}
         </div>
       </Card>
 
