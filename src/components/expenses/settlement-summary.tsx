@@ -1,13 +1,14 @@
 "use client";
 
 import Link from "next/link";
-import { Copy } from "lucide-react";
+import { Copy, Download } from "lucide-react";
 import { useMemo, useState, type ReactNode } from "react";
 import { useSavedGroups } from "@/components/groups/use-saved-groups";
 import { useGroupExpenses, type ExpenseStorageMode } from "@/components/expenses/use-group-expenses";
 import { calculateExpenseShares, calculateSettlement, formatCents, getExpenseSubtotalCents } from "@/lib/expenses/calculations";
 import { getUnassignedItems } from "@/lib/expenses/assignments";
 import { buildSettlementCopySummary } from "@/lib/expenses/settlement-sharing";
+import { PaymentReminderComposer } from "@/components/expenses/payment-reminder-composer";
 import type { ExpenseRecord } from "@/lib/expenses/types";
 
 export function SettlementSummary({ groupId }: { groupId: string }) {
@@ -17,6 +18,7 @@ export function SettlementSummary({ groupId }: { groupId: string }) {
   const [actionError, setActionError] = useState<string | null>(null);
   const [actionNotice, setActionNotice] = useState<string | null>(null);
   const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">("idle");
+  const [reportError, setReportError] = useState<string | null>(null);
   const [busyExpenseId, setBusyExpenseId] = useState<string | null>(null);
   const members = saved?.members ?? [];
   const memberIds = members.map((member) => member.id);
@@ -60,6 +62,31 @@ export function SettlementSummary({ groupId }: { groupId: string }) {
     }
   }
 
+  async function downloadSettlementReport() {
+    if (!saved || !totals || store.expenses.length === 0) return;
+    try {
+      const { createSettlementPdf } = await import("@/lib/expenses/pdf-report");
+      const bytes = await createSettlementPdf({
+        group: { name: saved.group.name, members },
+        expenses: store.expenses,
+        transfers: totals.transfers,
+        balances: totals.balances,
+        dataSource: store.signedIn ? "Cloud-saved records" : "Guest records on this device",
+      });
+      const blob = new Blob([bytes.buffer as ArrayBuffer], { type: "application/pdf" });
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      const filename = saved.group.name.normalize("NFKD").replace(/[^a-zA-Z0-9]+/g, "-").replace(/^-|-$/g, "").toLowerCase() || "splitzy-group";
+      anchor.href = url;
+      anchor.download = `${filename}-settlement.pdf`;
+      anchor.click();
+      window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+      setReportError(null);
+    } catch {
+      setReportError("The PDF report couldn’t be created. Your saved expenses were not changed.");
+    }
+  }
+
   if (groupsLoading || store.loading) return <p role="status" className="rounded-2xl border border-[#ebe7de] bg-white p-5 text-sm text-[#77766d]">Loading {store.signedIn ? "cloud expenses" : "guest expenses"}…</p>;
   if (!saved) return <section className="rounded-3xl border border-[#ebe7de] bg-white p-6"><h1 className="text-xl font-bold">Group not found</h1><p className="mt-2 text-sm text-[#77766d]">Load the group in this browser or wait for cloud access to return.</p><Link href="/" className="mt-4 inline-flex font-bold text-[#d9674b]">Back home →</Link></section>;
 
@@ -87,7 +114,7 @@ export function SettlementSummary({ groupId }: { groupId: string }) {
 
     <section className="rounded-3xl border border-[#ebe7de] bg-white p-5 sm:p-8"><div className="flex items-center justify-between gap-3"><h2 className="text-xl font-bold">Balances</h2><span className="text-xs text-[#88867d]">{store.signedIn ? "Cloud records only" : "Guest records"}</span></div>{(store.error || storageError) ? <p role="status" className="mt-3 text-sm text-[#77766d]">Balances are unavailable until the saved records can be loaded.</p> : expensesNeedingAssignment.length > 0 ? <p className="mt-3 text-sm text-[#77766d]">Balances will appear after every expense item has a person assigned.</p> : !store.expenses.length ? <p className="mt-3 text-sm text-[#77766d]">No expenses in this view yet. Add one to see each person’s share.</p> : totals ? <div className="mt-4 divide-y divide-[#eeeae2]">{members.map((member) => { const balance = totals.balances.get(member.id) ?? 0; return <div key={member.id} className="flex items-center justify-between gap-4 py-3"><span className="font-semibold">{member.name}</span><span className={`text-sm font-bold ${balance > 0 ? "text-[#567342]" : balance < 0 ? "text-[#a64531]" : "text-[#77766d]"}`}>{balance > 0 ? `Gets back ${formatCents(balance)}` : balance < 0 ? `Owes ${formatCents(-balance)}` : "No balance due"}</span></div>; })}</div> : <p role="alert" className="mt-3 text-sm text-[#a64531]">Settlement could not be calculated. Edit the expense items and check their assignments.</p>}</section>
 
-    {store.expenses.length > 0 && expensesNeedingAssignment.length === 0 && totals && <section className="rounded-3xl border border-[#ebe7de] bg-white p-5 sm:p-8"><div className="flex flex-wrap items-center justify-between gap-3"><h2 className="text-xl font-bold">Suggested transfers</h2><button type="button" onClick={() => void copySettlementSummary()} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl border border-[#dfe5df] bg-white px-4 text-sm font-semibold text-primary hover:bg-[#f3f7f3] focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-primary/20"><Copy size={15} aria-hidden="true" />Copy Summary</button></div>{totals.transfers.length ? <div className="mt-4 space-y-3">{totals.transfers.map((transfer, index) => <div key={`${transfer.fromMemberId}-${transfer.toMemberId}-${index}`} className="flex items-center justify-between gap-3 rounded-2xl bg-[#f7f6f1] p-4"><span className="text-sm font-semibold">{names.get(transfer.fromMemberId)} pays {names.get(transfer.toMemberId)}</span><strong>{formatCents(transfer.amountCents)}</strong></div>)}</div> : <p className="mt-3 text-sm text-[#77766d]">No transfers are due from these expenses.</p>}{copyState === "copied" && <p role="status" className="mt-3 text-sm font-medium text-primary">Summary copied.</p>}{copyState === "failed" && <div className="mt-3"><p role="status" className="text-sm text-[#77766d]">Couldn’t access the clipboard. Select and copy this summary:</p><pre className="mt-2 select-all whitespace-pre-wrap rounded-xl bg-[#f7f6f1] p-3 text-sm">{buildSettlementCopySummary(saved.group.name, totals.transfers, members)}</pre></div>}</section>}
+    {store.expenses.length > 0 && expensesNeedingAssignment.length === 0 && totals && <section className="rounded-3xl border border-[#ebe7de] bg-white p-5 sm:p-8"><div className="flex flex-wrap items-center justify-between gap-3"><h2 className="text-xl font-bold">Suggested transfers</h2><div className="flex flex-wrap gap-2"><button type="button" onClick={() => void downloadSettlementReport()} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl border border-[#dfe5df] bg-white px-3 sm:px-4 text-sm font-semibold text-primary hover:bg-[#f3f7f3] focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-primary/20"><Download size={15} aria-hidden="true" /><span>Download PDF</span></button><button type="button" onClick={() => void copySettlementSummary()} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl border border-[#dfe5df] bg-white px-3 sm:px-4 text-sm font-semibold text-primary hover:bg-[#f3f7f3] focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-primary/20"><Copy size={15} aria-hidden="true" />Copy Summary</button></div></div>{reportError && <p role="alert" className="mt-3 rounded-xl bg-[#fff1ee] p-3 text-sm text-[#a64531]">{reportError}</p>}{totals.transfers.length ? <div className="mt-4 space-y-3">{totals.transfers.map((transfer, index) => <div key={`${transfer.fromMemberId}-${transfer.toMemberId}-${index}`} className="rounded-2xl bg-[#f7f6f1] p-4"><div className="flex items-center justify-between gap-3"><span className="text-sm font-semibold">{names.get(transfer.fromMemberId)} pays {names.get(transfer.toMemberId)}</span><strong>{formatCents(transfer.amountCents)}</strong></div><PaymentReminderComposer groupName={saved.group.name} transfer={transfer} fromName={names.get(transfer.fromMemberId) ?? "Group member"} toName={names.get(transfer.toMemberId) ?? "Group member"} /></div>)}</div> : <p className="mt-3 text-sm text-[#77766d]">No transfers are due from these expenses.</p>}{copyState === "copied" && <p role="status" className="mt-3 text-sm font-medium text-primary">Summary copied.</p>}{copyState === "failed" && <div className="mt-3"><p role="status" className="text-sm text-[#77766d]">Couldn’t access the clipboard. Select and copy this summary:</p><pre className="mt-2 select-all whitespace-pre-wrap rounded-xl bg-[#f7f6f1] p-3 text-sm">{buildSettlementCopySummary(saved.group.name, totals.transfers, members)}</pre></div>}</section>}
 
     <section className="rounded-3xl border border-[#ebe7de] bg-white p-5 sm:p-8"><div className="flex items-center justify-between"><h2 className="text-xl font-bold">Expenses</h2><span className="text-xs text-[#88867d]">{store.expenses.length} {activeSource === "cloud" ? "saved to cloud" : "saved in this browser"}</span></div>{(store.error || storageError) ? <p className="mt-3 text-sm text-[#77766d]">Saved expenses aren’t shown as empty while storage is unavailable.</p> : !store.expenses.length ? <p className="mt-3 text-sm text-[#77766d]">No expenses have been recorded for this group yet.</p> : <div className="mt-4 space-y-3">{store.expenses.map((expense) => <ExpenseCard key={expense.id} expense={expense} names={names} members={members.map((member) => member.id)} editUrl={editUrl(expense, activeSource)} deleting={busyExpenseId === expense.id} onDelete={() => void removeExpense(expense, activeSource)} />)}</div>}</section>
 
