@@ -34,14 +34,14 @@ export function AuthPanel() {
     <Button type="button" variant="ghost" size="sm" onClick={() => void signOut()}>Sign out</Button>
   </div>;
 
-  return <div className="w-full sm:w-auto">
+  return <div className="w-full min-w-0 lg:w-auto">
     <form onSubmit={submit} className="flex w-full items-center gap-2 sm:w-auto">
       <label className="sr-only" htmlFor="auth-email">Email for cloud sync</label>
-      <div className="relative min-w-0 flex-1 sm:w-[210px] sm:flex-none">
-        <Mail size={15} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[#88958d]" aria-hidden="true" />
-        <Input id="auth-email" name="email" type="email" required autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="Email for cloud sync" className="h-10 pl-9 text-xs" />
+      <div className="relative min-w-0 flex-1 sm:w-[230px] sm:flex-none lg:w-[240px]">
+        <Mail size={15} className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-[#66758a]" aria-hidden="true" />
+        <Input id="auth-email" name="email" type="email" required autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="Email for cloud sync" className="h-11 pl-11 text-sm placeholder:text-[#607089]" />
       </div>
-      <Button type="submit" size="sm" disabled={busy} className="h-10 shrink-0 px-3">{busy ? "Sending…" : <>Sign in <ArrowRight size={14} aria-hidden="true" /></>}</Button>
+      <Button type="submit" size="sm" disabled={busy} className="h-11 shrink-0 px-3">{busy ? "Sending…" : <>Sign in <ArrowRight size={14} aria-hidden="true" /></>}</Button>
     </form>
     {message && <p role="status" className="brand-alert brand-alert-success mt-2 flex items-center gap-1.5 px-3 py-2 text-xs">{message.startsWith("Check") && <CheckCircle2 size={13} aria-hidden="true" />}{message}</p>}
   </div>;

@@ -61,8 +61,9 @@ export default function Home() {
           <div className="relative mx-auto w-full max-w-[420px] lg:ml-auto">
             <div className="absolute -right-8 -top-8 h-32 w-32 rounded-full bg-[#dfe8f5]/70 blur-2xl" />
             <div className="absolute -bottom-8 -left-8 h-36 w-36 rounded-full bg-[#dcefea]/70 blur-2xl" />
-            <Image src="/mascots/pip-receipt.png" alt="" width={260} height={238} className="mascot-bob absolute -right-1 -top-20 z-20 h-auto w-32 drop-shadow-[0_18px_20px_rgba(111,77,65,0.18)] sm:-right-3 sm:-top-24 sm:w-40" priority />
-            <div className="relative rotate-[1.5deg] rounded-[2rem] border border-[#ebe7de] bg-white p-5 shadow-[0_28px_80px_rgba(76,67,51,0.12)] sm:p-6">
+            <div className="relative pt-14 sm:pt-16">
+              <Image src="/mascots/pip-receipt.png" alt="" width={260} height={238} className="mascot-bob absolute right-4 top-0 z-20 h-auto w-24 drop-shadow-[0_18px_20px_rgba(111,77,65,0.18)] sm:right-6 sm:w-28" priority />
+              <div className="relative rotate-[1.5deg] rounded-[2rem] border border-[#ebe7de] bg-white p-5 shadow-[0_28px_80px_rgba(76,67,51,0.12)] sm:p-6">
               <div className="flex items-center justify-between border-b border-dashed border-[#eae7df] pb-4">
                 <div><p className="text-xs font-semibold uppercase tracking-[0.16em] text-[#a19e93]">{t("home.tableLabel")}</p><h3 className="mt-1 text-xl font-bold tracking-tight">{t("home.dinnerCrew")}</h3></div>
                 <span className="grid h-10 w-10 place-items-center rounded-full bg-[#f7efe9] text-lg" aria-hidden="true">✳</span>
@@ -85,9 +86,10 @@ export default function Home() {
                 <span className="rounded-full bg-[#edf1e8] px-3 py-1.5 text-xs font-bold text-[#687957]">{t("home.allSettled")}</span>
               </div>
             </div>
-            <div className="relative -mt-1 flex items-center justify-between rounded-b-[2rem] border-x border-b border-[#ebe7de] bg-white/80 px-5 py-3">
-              <span className="text-xs font-bold text-[#9a8176]">{t("home.everyTable")}</span>
-              <Image src="/mascots/friends-lineup.png" alt="" width={434} height={145} className="h-9 w-28 object-contain object-right" />
+              <div className="relative -mt-1 flex items-center justify-between gap-3 rounded-b-[2rem] border-x border-b border-[#ebe7de] bg-white/80 px-5 py-3">
+                <span className="min-w-0 text-xs font-bold text-[#9a8176]">{t("home.everyTable")}</span>
+                <Image src="/mascots/friends-lineup.png" alt="" width={434} height={145} className="h-8 w-24 shrink-0 object-contain object-right sm:h-9 sm:w-28" />
+              </div>
             </div>
           </div>
         </section>

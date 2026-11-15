@@ -25,7 +25,7 @@ export function AppShell({ title, description, active, children, action }: { tit
           <span className="text-[1.2rem] font-extrabold tracking-[-0.055em]">splitzy</span>
         </Link>
         <div className="relative mt-10 overflow-hidden rounded-2xl border border-[#dfe7ef] bg-[#f3f6fb] p-4">
-          <Image src="/mascots/pip-receipt.png" alt="" width={116} height={106} className="mascot-bob absolute -right-3 -top-5 h-16 w-16 object-contain opacity-90" aria-hidden="true" />
+          <Image src="/mascots/pip-receipt.png" alt="" width={116} height={106} className="mascot-bob absolute right-3 top-3 h-14 w-14 object-contain opacity-90" aria-hidden="true" />
           <div className="relative flex h-9 w-9 items-center justify-center rounded-xl bg-white text-primary shadow-sm"><UsersRound size={17} aria-hidden="true" /></div>
           <p className="relative mt-3 text-sm font-extrabold">Better together</p>
           <p className="relative mt-1 text-xs leading-5 text-muted">Keep shared costs clear, so the good parts stay the focus.</p>
@@ -51,8 +51,10 @@ export function AppShell({ title, description, active, children, action }: { tit
             <nav aria-label="Main navigation" className="order-3 hidden w-full items-center gap-1 border-t border-border pt-3 md:flex lg:order-2 lg:w-auto lg:border-0 lg:pt-0">
               {navigation.map(({ href, label, key, Icon }) => <Link key={key} href={href} aria-current={active === key ? "page" : undefined} data-active={active === key} className={cn("brand-nav-link flex min-h-10 items-center gap-2 px-3 text-sm font-bold", active === key ? "text-primary" : "text-muted hover:bg-accent-soft hover:text-foreground")}><Icon size={16} strokeWidth={1.9} aria-hidden="true" /><span>{label}</span>{key === "scan" && <ArrowUpRight size={13} className="text-muted" aria-hidden="true" />}</Link>)}
             </nav>
-            <div className="ml-auto flex items-center gap-2 sm:gap-3 lg:order-3">
+            <div className="order-2 ml-auto flex items-center gap-2 sm:gap-3 lg:order-3">
               {action}
+            </div>
+            <div className="order-4 basis-full border-t border-border pt-3 lg:order-3 lg:basis-auto lg:border-0 lg:pt-0">
               <AuthPanel />
             </div>
           </div>
