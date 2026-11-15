@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { Member } from "@/types";
 import { useAuth } from "@/components/groups/auth-provider";
-import { createClient } from "@/lib/supabase/client";
+import { createClient, hasSupabaseConfig } from "@/lib/supabase/client";
 import { deleteCloudExpense, loadCloudExpenses, saveCloudExpense } from "@/lib/expenses/cloud";
 import { deleteLocalExpense, EXPENSES_UPDATED_EVENT, getSavedExpenses, saveExpense } from "@/lib/expenses/storage";
 import type { ExpenseRecord } from "@/lib/expenses/types";
@@ -12,7 +12,8 @@ export type ExpenseStorageMode = "cloud" | "guest" | "offline";
 
 export function useGroupExpenses(groupId: string, members: Member[]) {
   const { user, loading: authLoading } = useAuth();
-  const client = useMemo(() => createClient(), []);
+  const cloudEnabled = hasSupabaseConfig();
+  const client = useMemo(() => cloudEnabled ? createClient() : null, [cloudEnabled]);
   const memberIdsKey = members.map((member) => member.id).join("|");
   const memberIds = useMemo(() => memberIdsKey ? memberIdsKey.split("|") : [], [memberIdsKey]);
   const [expenses, setExpenses] = useState<ExpenseRecord[]>([]);
@@ -27,6 +28,7 @@ export function useGroupExpenses(groupId: string, members: Member[]) {
     try {
       const local = getSavedExpenses(groupId);
       if (user) {
+        if (!client) throw new Error("Cloud storage is not configured.");
         setMode("cloud");
         setOfflineExpenses(local);
         const remote = await loadCloudExpenses(client, groupId, memberIds);
@@ -65,6 +67,7 @@ export function useGroupExpenses(groupId: string, members: Member[]) {
   const save = useCallback(async (expense: ExpenseRecord, target: ExpenseStorageMode = user ? "cloud" : "guest", allowUpdate = true) => {
     if (target === "cloud") {
       if (!user) throw new Error("Sign in before saving to Supabase.");
+      if (!client) throw new Error("Cloud storage is not configured.");
       await saveCloudExpense(client, expense, memberIds, allowUpdate);
       await refresh();
       return;
@@ -76,6 +79,7 @@ export function useGroupExpenses(groupId: string, members: Member[]) {
   const remove = useCallback(async (expenseId: string, target: ExpenseStorageMode) => {
     if (target === "cloud") {
       if (!user) throw new Error("Sign in before deleting a cloud expense.");
+      if (!client) throw new Error("Cloud storage is not configured.");
       await deleteCloudExpense(client, expenseId, groupId);
     } else deleteLocalExpense(expenseId);
     await refresh();
@@ -83,6 +87,7 @@ export function useGroupExpenses(groupId: string, members: Member[]) {
 
   const importOffline = useCallback(async (expenseId: string) => {
     if (!user) throw new Error("Sign in before importing browser expenses.");
+    if (!client) throw new Error("Cloud storage is not configured.");
     const offline = getSavedExpenses(groupId).find((expense) => expense.id === expenseId);
     if (!offline) throw new Error("That browser copy is no longer available.");
     const remote = await loadCloudExpenses(client, groupId, memberIds);

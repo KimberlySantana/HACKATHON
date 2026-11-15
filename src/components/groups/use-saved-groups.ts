@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useAuth } from "@/components/groups/auth-provider";
-import { createClient } from "@/lib/supabase/client";
+import { createClient, hasSupabaseConfig } from "@/lib/supabase/client";
 import { GROUPS_STORAGE_KEY, parseSavedGroups, serializeSavedGroups, type SavedGroup } from "@/lib/groups/storage";
 import { EXPENSES_STORAGE_KEY, EXPENSES_UPDATED_EVENT, getSavedExpenses, parseExpenses } from "@/lib/expenses/storage";
 import { findReferencedMembers } from "@/lib/groups/member-references";
@@ -28,7 +28,8 @@ export function useSavedGroups() {
   const [loading, setLoading] = useState(true);
   const [storageError, setStorageError] = useState<string | null>(null);
   const [hasLocalGroups, setHasLocalGroups] = useState(false);
-  const supabase = useMemo(() => createClient(), []);
+  const cloudEnabled = hasSupabaseConfig();
+  const supabase = useMemo(() => cloudEnabled ? createClient() : null, [cloudEnabled]);
 
   const load = useCallback(async () => {
     if (authLoading) return;
@@ -38,6 +39,7 @@ export function useSavedGroups() {
       local = parseSavedGroups(window.localStorage.getItem(GROUPS_STORAGE_KEY));
       setHasLocalGroups(local.length > 0);
       if (user) {
+        if (!supabase) throw new Error("Cloud storage is not configured.");
         try {
           const { data: groupRows, error: groupError } = await supabase.from("groups").select("id,name,created_at").order("created_at", { ascending: false });
           if (groupError) throw groupError;
@@ -72,6 +74,7 @@ export function useSavedGroups() {
   const saveGroups = useCallback(async (nextGroups: SavedGroup[]): Promise<string | null> => {
     try {
       if (user) {
+        if (!supabase) throw new Error("Cloud storage is not configured.");
         const removals: Array<{ groupId: string; memberIds: string[]; members: SavedGroup["members"] }> = [];
         for (const previous of groups) {
           const next = nextGroups.find((entry) => entry.group.id === previous.group.id);
@@ -162,6 +165,7 @@ export function useSavedGroups() {
     }
 
     if (user) {
+      if (!supabase) throw new Error("Cloud storage is not configured.");
       const { data, error } = await supabase.rpc("delete_group", { p_group_id: groupId });
       if (error) throw new Error(groupDeleteError(error));
       if (data !== true) throw new Error("The group was not found in your cloud account. Nothing was deleted.");
@@ -191,7 +195,7 @@ export function useSavedGroups() {
   }, [supabase, user]);
 
   const importLocalGroups = useCallback(async () => {
-    if (!user) return false;
+    if (!user || !supabase) return false;
     try {
       const local = parseSavedGroups(window.localStorage.getItem(GROUPS_STORAGE_KEY));
       const { data: existing, error } = await supabase.from("groups").select("id");
