@@ -35,11 +35,11 @@ export function AuthPanel() {
   </div>;
 
   return <div className="w-full min-w-0 lg:w-auto">
-    <form onSubmit={submit} className="flex w-full items-center gap-2 sm:w-auto">
+    <form onSubmit={submit} className="flex w-full min-w-0 flex-wrap items-center gap-2 sm:w-auto sm:flex-nowrap">
       <label className="sr-only" htmlFor="auth-email">Email for cloud sync</label>
       <div className="relative min-w-0 flex-1 sm:w-[230px] sm:flex-none lg:w-[240px]">
         <Mail size={15} className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-[#66758a]" aria-hidden="true" />
-        <Input id="auth-email" name="email" type="email" required autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="Email for cloud sync" className="h-11 pl-11 text-sm placeholder:text-[#607089]" />
+        <Input id="auth-email" name="email" type="email" required autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="Email for cloud sync" className="brand-input-leading-icon h-11 text-sm placeholder:text-[#607089]" />
       </div>
       <Button type="submit" size="sm" disabled={busy} className="h-11 shrink-0 px-3">{busy ? "Sending…" : <>Sign in <ArrowRight size={14} aria-hidden="true" /></>}</Button>
     </form>

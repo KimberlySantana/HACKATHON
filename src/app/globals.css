@@ -128,6 +128,7 @@ html:lang(ko) body { font-family: var(--font-noto-kr); }
   outline: none;
   transition: border-color 180ms ease, background-color 180ms ease, box-shadow 180ms ease;
 }
+.brand-input-leading-icon { padding-left: 2.75rem; }
 .brand-input:hover { border-color: #b9c9d9; }
 .brand-input:focus { border-color: var(--ring); background: white; box-shadow: 0 0 0 4px rgba(85, 120, 165, 0.14); }
 
